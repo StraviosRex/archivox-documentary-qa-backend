@@ -14,7 +14,7 @@ Each chunk stores `start_timestamp`, `end_timestamp`, `segment_start_index`, `se
 
 ## 2. Retrieval
 
-**Embedding model:** `all-MiniLM-L6-v2` (sentence-transformers, local, 384 dimensions). Sentence transformers fine-tune a transformer encoder so that semantically similar sentences are mapped to nearby points in the embedding space. Similarity is measured as cosine distance — the angular distance between two vectors — which is invariant to vector magnitude and reliable for comparing unit-normalized text embeddings.
+**Embedding model:** `all-MiniLM-L6-v2` (sentence-transformers, local, 384 dimensions). Sentence transformers fine-tune a transformer encoder so that semantically similar sentences are mapped to nearby points in the embedding space. Similarity is measured as cosine distance — the angular distance between two vectors — which is invariant to vector magnitude and reliable for comparing unit-normalized text embeddings. The Dockerfile installs CPU-only PyTorch explicitly before the rest of the dependencies; without this, sentence-transformers pulls the default CUDA-enabled build which adds ~900MB of unused GPU libraries on a CPU-only deployment. The embedding model is also pre-downloaded at image build time so it is baked into the layer cache and the first request has no cold-start delay.
 
 **Vector store:** ChromaDB with local persistence. Under the hood it uses an HNSW (Hierarchical Navigable Small World) index, which builds a graph of approximate nearest neighbors that allows sub-linear lookup without scanning every stored vector. For a corpus of ~130 chunks this is effectively instant, but the design holds at larger scales. The index is rebuilt when the transcript file, embedding model, or chunking configuration changes.
 
