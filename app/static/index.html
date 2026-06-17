@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Archivox</title>
+
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: #f4f1ea;
+      color: #2f241d;
+      margin: 0;
+      padding: 0;
+    }
+
+    .container {
+      max-width: 900px;
+      margin: 40px auto;
+      padding: 24px;
+      background: #fffaf2;
+      border: 1px solid #d7c7aa;
+      border-radius: 12px;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+    }
+
+    h1 {
+      margin-top: 0;
+      font-size: 32px;
+    }
+
+    .subtitle {
+      color: #6c5a47;
+      margin-bottom: 24px;
+    }
+
+    label {
+      display: block;
+      margin-bottom: 8px;
+      font-weight: bold;
+    }
+
+    select,
+    textarea,
+    button {
+      font: inherit;
+    }
+
+    select {
+      width: 100%;
+      padding: 10px;
+      margin-bottom: 16px;
+      border: 1px solid #c4b394;
+      border-radius: 8px;
+      background: #fff;
+    }
+
+    textarea {
+      width: 100%;
+      min-height: 110px;
+      padding: 12px;
+      border: 1px solid #c4b394;
+      border-radius: 8px;
+      resize: vertical;
+      box-sizing: border-box;
+      background: #fff;
+    }
+
+    button {
+      margin-top: 12px;
+      padding: 10px 18px;
+      border: none;
+      border-radius: 8px;
+      background: #5c3d2e;
+      color: #fff;
+      cursor: pointer;
+    }
+
+    button:disabled {
+      background: #9b8977;
+      cursor: not-allowed;
+    }
+
+    .answer-box,
+    .sources-box,
+    .meta-box {
+      margin-top: 24px;
+      padding: 16px;
+      border: 1px solid #d7c7aa;
+      border-radius: 10px;
+      background: #fff;
+    }
+
+    .answer-box h2,
+    .sources-box h2,
+    .meta-box h2 {
+      margin-top: 0;
+      font-size: 20px;
+    }
+
+    .answer {
+      white-space: pre-wrap;
+      line-height: 1.5;
+    }
+
+    .source {
+      padding: 12px;
+      border-left: 4px solid #8a6642;
+      background: #f9f3e8;
+      margin-bottom: 12px;
+      border-radius: 6px;
+    }
+
+    .timestamp {
+      font-weight: bold;
+      margin-bottom: 6px;
+      color: #4a3325;
+    }
+
+    .excerpt {
+      line-height: 1.45;
+    }
+
+    .status {
+      margin-top: 12px;
+      color: #6c5a47;
+    }
+
+    .error {
+      color: #9b1c1c;
+      font-weight: bold;
+    }
+
+    .meta-grid {
+      display: grid;
+      grid-template-columns: 140px 1fr;
+      gap: 8px;
+      font-size: 14px;
+    }
+
+    .meta-label {
+      font-weight: bold;
+      color: #4a3325;
+    }
+
+    .hidden {
+      display: none;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="container">
+    <h1>Archivox</h1>
+    <p class="subtitle">
+      Ask questions about the documentary transcript. Answers are grounded in retrieved transcript excerpts.
+    </p>
+
+    <label for="profileSelect">Model profile</label>
+    <select id="profileSelect">
+      <option value="">Loading profiles...</option>
+    </select>
+
+    <label for="questionInput">Question</label>
+    <textarea id="questionInput" placeholder="Ask a question about the transcript..."></textarea>
+
+    <button id="askButton">Ask</button>
+
+    <div id="status" class="status"></div>
+
+    <div id="metaBox" class="meta-box hidden">
+      <h2>Model Used</h2>
+      <div class="meta-grid">
+        <div class="meta-label">Profile</div>
+        <div id="metaProfile"></div>
+
+        <div class="meta-label">Provider</div>
+        <div id="metaProvider"></div>
+
+        <div class="meta-label">Requested model</div>
+        <div id="metaModel"></div>
+
+        <div class="meta-label">Actual model</div>
+        <div id="metaModelUsed"></div>
+      </div>
+    </div>
+
+    <div id="answerBox" class="answer-box hidden">
+      <h2>Answer</h2>
+      <div id="answer" class="answer"></div>
+    </div>
+
+    <div id="sourcesBox" class="sources-box hidden">
+      <h2>Sources</h2>
+      <div id="sources"></div>
+    </div>
+  </div>
+
+  <script>
+    const profileSelect = document.getElementById("profileSelect");
+    const questionInput = document.getElementById("questionInput");
+    const askButton = document.getElementById("askButton");
+    const statusEl = document.getElementById("status");
+
+    const metaBox = document.getElementById("metaBox");
+    const metaProfile = document.getElementById("metaProfile");
+    const metaProvider = document.getElementById("metaProvider");
+    const metaModel = document.getElementById("metaModel");
+    const metaModelUsed = document.getElementById("metaModelUsed");
+
+    const answerBox = document.getElementById("answerBox");
+    const answerEl = document.getElementById("answer");
+
+    const sourcesBox = document.getElementById("sourcesBox");
+    const sourcesEl = document.getElementById("sources");
+
+    function setStatus(message, isError = false) {
+      statusEl.textContent = message;
+      statusEl.className = isError ? "status error" : "status";
+    }
+
+    function clearResults() {
+      answerBox.classList.add("hidden");
+      sourcesBox.classList.add("hidden");
+      metaBox.classList.add("hidden");
+
+      answerEl.textContent = "";
+      sourcesEl.innerHTML = "";
+
+      metaProfile.textContent = "";
+      metaProvider.textContent = "";
+      metaModel.textContent = "";
+      metaModelUsed.textContent = "";
+    }
+
+    async function loadProfiles() {
+      try {
+        const response = await fetch("/profiles");
+
+        if (!response.ok) {
+          throw new Error("Failed to load model profiles.");
+        }
+
+        const data = await response.json();
+
+        profileSelect.innerHTML = "";
+
+        for (const profile of data.profiles) {
+          const option = document.createElement("option");
+          option.value = profile.id;
+          option.textContent = `${profile.label} (${profile.provider})`;
+
+          if (profile.id === data.default_profile) {
+            option.selected = true;
+          }
+
+          profileSelect.appendChild(option);
+        }
+
+        setStatus("");
+      } catch (error) {
+        profileSelect.innerHTML = "";
+        const option = document.createElement("option");
+        option.value = "";
+        option.textContent = "Default model profile";
+        profileSelect.appendChild(option);
+
+        setStatus("Could not load model profiles. Default backend profile will be used.", true);
+      }
+    }
+
+    function renderMeta(data) {
+      if (!data.profile && !data.provider && !data.model && !data.model_used) {
+        metaBox.classList.add("hidden");
+        return;
+      }
+
+      metaProfile.textContent = data.profile || "N/A";
+      metaProvider.textContent = data.provider || "N/A";
+      metaModel.textContent = data.model || "N/A";
+      metaModelUsed.textContent = data.model_used || "N/A";
+
+      metaBox.classList.remove("hidden");
+    }
+
+    function renderAnswer(answer) {
+      answerEl.textContent = answer;
+      answerBox.classList.remove("hidden");
+    }
+
+    function renderSources(sources) {
+      sourcesEl.innerHTML = "";
+
+      if (!sources || sources.length === 0) {
+        sourcesBox.classList.add("hidden");
+        return;
+      }
+
+      for (const source of sources) {
+        const sourceDiv = document.createElement("div");
+        sourceDiv.className = "source";
+
+        const timestampDiv = document.createElement("div");
+        timestampDiv.className = "timestamp";
+        timestampDiv.textContent = source.timestamp;
+
+        const excerptDiv = document.createElement("div");
+        excerptDiv.className = "excerpt";
+        excerptDiv.textContent = source.excerpt;
+
+        sourceDiv.appendChild(timestampDiv);
+        sourceDiv.appendChild(excerptDiv);
+        sourcesEl.appendChild(sourceDiv);
+      }
+
+      sourcesBox.classList.remove("hidden");
+    }
+
+    async function askQuestion() {
+      const question = questionInput.value.trim();
+      const profile = profileSelect.value;
+
+      if (!question) {
+        setStatus("Please enter a question.", true);
+        return;
+      }
+
+      clearResults();
+      setStatus("Thinking...");
+      askButton.disabled = true;
+
+      try {
+        const response = await fetch("/ask", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            question,
+            profile: profile || null,
+          }),
+        });
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(errorText || "Request failed.");
+        }
+
+        const data = await response.json();
+
+        renderMeta(data);
+        renderAnswer(data.answer);
+        renderSources(data.sources);
+
+        setStatus("");
+      } catch (error) {
+        clearResults();
+        setStatus(`Error: ${error.message}`, true);
+      } finally {
+        askButton.disabled = false;
+      }
+    }
+
+    askButton.addEventListener("click", askQuestion);
+
+    questionInput.addEventListener("keydown", (event) => {
+      if (event.ctrlKey && event.key === "Enter") {
+        askQuestion();
+      }
+    });
+
+    loadProfiles();
+  </script>
+</body>
+</html>

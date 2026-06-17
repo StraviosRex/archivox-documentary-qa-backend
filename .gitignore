@@ -1,0 +1,34 @@
+# --- Python ---
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+env/
+archivox/
+
+# --- Secrets ---
+.env
+
+# --- ChromaDB persistence ---
+chroma_db/
+
+# --- IDE / editor ---
+.vscode/
+.idea/
+
+# --- OS ---
+.DS_Store
+Thumbs.db
+
+# --- Local backups / duplicates (should not exist long-term, but ignored as a safety net) ---
+*_backup.py
+*_stable.py
+*copy*.py
+*copy*.yaml
+DESIGN(*).md
+*.example1.example
+gitignore.txt
+config/models_stable.yaml
+AGENT_BRIEF.md
+.claude/settings.local.json
