@@ -175,7 +175,6 @@ Profiles are defined in [config/models.yaml](config/models.yaml). The active pro
 | `gemini_flash` | Google | Gemini 2.5 Flash |
 | `openrouter_free_router` | OpenRouter | Auto-routed free model |
 | `ollama_llama32_3b` | Ollama (local) | Llama 3.2 3B |
-| `ollama_qwen25_3b` | Ollama (local) | Qwen 2.5 3B |
 
 OpenRouter profiles with fallback models automatically retry on other free models if the primary is unavailable. This trades consistency for availability, the underlying model can vary between requests, so it is recommended as a last-resort profile rather than the default. Ollama profiles require no API key but require a local Ollama installation and are not used as the default given typical laptop hardware constraints.
 
