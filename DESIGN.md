@@ -1,127 +1,94 @@
 # Design Document: Documentary Q&A Backend
 
+## Overview
+
+Archivox answers natural-language questions about a documentary transcript, grounded in the source material. At startup the transcript is chunked, embedded, and indexed. Each question is embedded and matched against that index using hybrid retrieval; low-confidence chunks are dropped before the LLM is called. The LLM generates the natural-language answer; the backend constructs citations directly from the retrieved chunks, making timestamps deterministic rather than LLM-generated.
+
 ## 1. Chunking Strategy
 
-The transcript is provided as plain text with alternating timestamp lines and spoken text blocks. Each timestamp uses the `HH:MM:SS` format. The supplied transcript contains approximately 260 timestamped segments and spans about 3 hours and 53 minutes.
+The transcript is structured as alternating timestamp lines and spoken-text blocks in `HH:MM:SS` format. The application parses it into `(timestamp, text)` pairs and groups every 3 consecutive segments into an overlapping chunk (1-segment overlap), producing approximately 130 chunks of 350–450 words each.
 
-The application parses the transcript into `(timestamp, text)` pairs, then groups every 3 consecutive transcript segments into one chunk with a 1-segment overlap. With this configuration, the transcript produces approximately 130 overlapping chunks. Each chunk is usually around 350 to 450 words, which is large enough to preserve local context but still small enough for precise retrieval.
+Timestamp-based grouping was chosen over character or sentence splitting because the documentary's natural segment boundaries already correspond to topic changes. Character splitting risks cutting mid-sentence or separating a claim from its supporting context, degrading both retrieval precision and source citation accuracy. The 1-segment overlap ensures that a topic spanning two chunks is fully capturable by either.
 
-This strategy was chosen because the transcript timestamps already provide natural boundaries. Fixed character splitting could cut through a sentence or separate a claim from its explanation, which would make both retrieval and source citation weaker. Grouping 3 segments gives the retriever enough context to capture a complete point, while the 1-segment overlap protects topics that continue across chunk boundaries.
-
-Each stored chunk contains:
-
-- `chunk_id`
-- `start_timestamp`
-- `end_timestamp`
-- `segment_start_index`
-- `segment_end_index`
-- `text`
-
-The API source references are generated from this metadata, so the returned timestamps always correspond to actual transcript locations.
+Each chunk stores `start_timestamp`, `end_timestamp`, `segment_start_index`, `segment_end_index`, and the full text. API source references are built directly from this metadata, so returned timestamps always correspond to actual transcript locations.
 
 ## 2. Retrieval
 
-The system uses a retrieval-based approach rather than sending the full transcript to the LLM. At startup, the service parses the transcript, chunks it, embeds the chunks, and stores them in a local vector index.
+**Embedding model:** `all-MiniLM-L6-v2` (sentence-transformers, local, 384 dimensions). Sentence transformers fine-tune a transformer encoder so that semantically similar sentences are mapped to nearby points in the embedding space. Similarity is measured as cosine distance — the angular distance between two vectors — which is invariant to vector magnitude and reliable for comparing unit-normalized text embeddings.
 
-**Embedding model:** `all-MiniLM-L6-v2` from `sentence-transformers`. It runs locally, requires no API key, produces 384-dimensional embeddings, and is fast enough for a corpus of this size. The model may be downloaded during setup or first startup, then cached locally.
+**Vector store:** ChromaDB with local persistence. Under the hood it uses an HNSW (Hierarchical Navigable Small World) index, which builds a graph of approximate nearest neighbors that allows sub-linear lookup without scanning every stored vector. For a corpus of ~130 chunks this is effectively instant, but the design holds at larger scales. The index is rebuilt when the transcript file, embedding model, or chunking configuration changes.
 
-**Vector store:** ChromaDB with local persistence. The persisted index is reused on later starts, but it is rebuilt when the transcript hash, embedding model, or chunking configuration changes. This avoids accidentally serving stale embeddings after the transcript or retrieval settings are updated.
+**Why hybrid retrieval.** Dense vector search alone has a structural weakness with proper names: a name like "Thomas Crapper" carries less discriminative signal in embedding space than descriptive vocabulary, because the model has been exposed to that name across many unrelated contexts. A lexical fallback runs in parallel, scanning chunks for exact proper-name phrases or full query-substring matches. A chunk found by both dense and lexical search is a stronger candidate than one found by either alone, so the confidence filter admits a chunk if either signal independently clears its bar, rather than letting a borderline dense distance override an already-strong lexical match.
 
-For each question, the service embeds the user query with the same embedding model and retrieves the top 5 most relevant chunks using vector similarity search. The top 5 chunks are passed to the LLM as context. The top 2 to 3 ranked chunks are returned as structured source references in the API response.
+**Confidence filtering.** Chunks exceeding a cosine distance of 0.48 and lacking a qualifying lexical match are dropped before generation. This threshold was calibrated empirically: in-scope questions consistently produced top candidates below 0.48; out-of-scope questions with no shared vocabulary produced distances above 0.65. Questions that share general documentary vocabulary (e.g. asking about the internet in the context of "Victorian households") can produce candidates in the 0.44–0.48 range, because dense embeddings measure topical proximity, not answerability. The LLM acts as a second filter in those cases, correctly refusing when the retrieved excerpts don't actually address the question.
 
-A lightweight lexical fallback can also be used for exact names, places, or unusual phrases. Dense embeddings are good for semantic questions, but exact keyword matching can improve recall for named-person or named-location questions. Retrieved dense and lexical candidates are deduplicated and ranked before prompt construction.
-
-If retrieval confidence is too low, the service returns a conservative response saying that the transcript does not contain enough information to answer the question. This prevents the LLM from guessing when the available evidence is weak.
-
-
-Retrieval confidence is determined empirically rather than by an arbitrary cutoff. Cosine distances were measured across a set of known in-scope and out-of-scope test questions. For questions well covered by the transcript, retrieved chunk distances consistently stayed below approximately 0.48 across the top 10 dense candidates. For a clearly out-of-scope question, distances started above 0.65, with no overlap between the two ranges. A similarity threshold of 0.55 was chosen to sit within this gap, rejecting chunks that fall outside the demonstrated range of genuinely relevant content while leaving margin on both sides for natural variation across different question phrasings.
-
+**Named-entity prioritization.** After filtering, chunks containing an exact proper-name phrase match are promoted to the front of the context window. Only their immediate neighbors (±1 index position) are kept as supporting context; remaining candidates are discarded. This prevents topically adjacent but less specific chunks from burying the directly relevant one.
 
 ## 3. Prompt Construction
 
-The LLM receives only the retrieved transcript excerpts, not the full transcript. The prompt is built from a system instruction, the ranked context chunks, and the user question.
+The LLM receives only the retrieved chunks, formatted as labeled excerpts with timestamp ranges, not the full transcript. The system prompt instructs it to answer in 2–4 sentences from the provided material only, to use a fixed refusal phrase when the excerpts are insufficient, and to open non-refusal answers with a natural timestamp phrase.
 
 ```text
-System: You are a Q&A assistant. Answer the user's question using only the
-provided transcript excerpts. If the excerpts do not contain enough information,
-say: "I don't have enough information in the transcript to answer that question."
+System:
+You are a Q&A assistant for a documentary transcript. Answer using ONLY
+the provided transcript excerpts. If the excerpts do not contain enough
+information, respond only with: "I don't have enough information in the
+transcript to answer that question."
 
-Do not invent facts, names, dates, causes, or conclusions. Keep the answer
-focused on what the transcript says.
+Rules: do not invent facts; keep answers to 2–4 sentences; no Markdown;
+never reproduce the [Excerpt N | ...] labels; begin answerable responses
+with a natural timestamp phrase (e.g. "Between 00:10:33 and 00:13:21,").
 
-Context:
-[Source 1 | 00:10:33-00:13:21]
-<chunk text>
+User:
+Based on the following transcript excerpts, answer the question.
 
-[Source 2 | 00:13:21-00:16:14]
-<chunk text>
+Transcript excerpts:
+[Excerpt 1 | 00:10:33 - 00:13:21]
+Boracic acid was a component of a product called borax, used during the
+Victorian period to neutralise the acid in sour milk...
 
-...
+[Excerpt 2 | 00:13:21 - 00:16:14]
+The real problem is it doesn't get rid of the bacteria, the underlying
+cause of the acid...
 
-User question:
-<question>
+Question:
+What was borax used for in Victorian milk?
 ```
 
-The LLM is responsible only for generating the natural-language answer. It is not trusted to generate source metadata. The backend constructs the `sources` array directly from the ranked retrieved chunks. This makes timestamps and excerpts deterministic, easier to test, and less vulnerable to hallucinated citations.
-
-Each source returned by the API contains a timestamp range and a short excerpt from the retrieved chunk. Excerpts are trimmed to the most relevant portion where possible, rather than returning an entire long chunk.
+The `sources` array is constructed by the backend directly from the retrieved and ranked chunks — the LLM is never asked to produce or reference chunk identifiers. This is deliberate: an LLM instructed to cite sources can confabulate timestamps that were never retrieved. Generating the answer text and generating traceable citations are fundamentally different reliability problems, and separating them removes the second problem entirely.
 
 ## 4. LLM Provider Configuration
 
-The LLM backend is configurable through environment variables, so the provider can be changed without code changes.
+LLM backends are configured as named profiles in `config/models.yaml`, each specifying provider, model, base URL, and which environment variable holds the API key. All supported providers (Groq, Gemini, OpenRouter, Ollama) expose OpenAI-compatible chat completion endpoints, so adding a new provider requires only a YAML entry — no code changes. The active profile is set via `LLM_PROFILE` in `.env` or overridden per-request via the `profile` field in `/ask`.
 
-| Variable | Example | Purpose |
-|----------|---------|---------|
-| `LLM_PROVIDER` | `groq`, `ollama`, `gemini` | Selects the provider |
-| `LLM_MODEL` | `llama-3.3-70b-versatile` | Model name |
-| `LLM_API_KEY` | `gsk_...` | API key, not needed for Ollama |
-| `LLM_BASE_URL` | `http://localhost:11434` | Optional base URL override |
+`groq_llama8b` is the default; it was the most extensively exercised profile during retrieval and threshold tuning. Ollama was tested with llama3.2:3b across all five evaluation categories and produced correct, well-grounded answers in every case, including accurate refusal on the out-of-scope question. 
 
-Groq and Ollama are accessed through OpenAI-compatible chat completion interfaces. Gemini can be configured through its OpenAI-compatible endpoint or handled through a provider-specific adapter if needed.
-
-The default provider is Groq free tier using `llama-3.3-70b-versatile`, because it offers fast inference and strong instruction following without requiring a paid subscription. A fully local Ollama setup is supported as an optional configuration for offline use.
+It is not the default since it requires a local Ollama installation the reviewer may not have, but it is a genuinely viable fully-offline option, not just an architectural placeholder.
 
 ## 5. API Response Construction
 
-The API exposes a single endpoint:
-
-```http
-POST /ask
-```
-
-Request body:
-
 ```json
 {
-  "question": "What was borax used for in Victorian milk?"
-}
-```
-
-Response body:
-
-```json
-{
-  "answer": "Borax was used to neutralize the acid in sour milk, making spoiled milk taste fresh again. However, it did not remove the bacteria that caused the milk to spoil, so it could hide dangerous contamination.",
+  "answer": "Between 00:10:33 and 00:13:21, borax was used...",
   "sources": [
-    {
-      "timestamp": "00:10:33-00:13:21",
-      "excerpt": "Boracic acid was a component of a product called borax... used during the Victorian period to prolong the life of milk."
-    },
-    {
-      "timestamp": "00:13:21-00:16:14",
-      "excerpt": "The real problem is it doesn't get rid of the bacteria, the underlying cause of the acid."
-    }
-  ]
+    { "timestamp": "00:10:33-00:13:21", "excerpt": "..." }
+  ],
+  "profile": "groq_llama8b",
+  "provider": "groq",
+  "model": "llama-3.1-8b-instant",
+  "model_used": "llama-3.1-8b-instant"
 }
 ```
 
-The source list is ranked according to retrieval relevance. For out-of-scope questions, the response uses a clear refusal rather than attempting to infer an answer from unrelated transcript sections.
+The number of sources varies with retrieval confidence rather than being capped at a fixed count. Padding the response with weak sources to hit a number contradicts the goal of grounded citations.
+
+Before returning, two deterministic post-processing passes run on the LLM output: the first checks for the instructed refusal phrase and returns empty sources if detected; the second checks whether the answer opens with a timestamp phrase and prepends one from the top-ranked chunk if not. This keeps the timestamp convention consistent without relying on the LLM to produce a specific output format in every case.
+
+Response times were measured directly against the 30-second requirement. The default Groq profile typically responds in under 5 seconds. The fully local Ollama fallback, the slowest configuration tested, completed in roughly 16 seconds. Both are comfortably within the limit.
 
 ## 6. What I Would Improve Given More Time
 
-- **Hybrid retrieval:** Add a proper BM25 index and combine it with vector search for better handling of exact names, locations, and rare terms.
-- **Re-ranking:** Add a cross-encoder re-ranker, such as `cross-encoder/ms-marco-MiniLM-L-6-v2`, after initial retrieval to improve source ordering.
+- **Re-ranking:** Add a cross-encoder re-ranker, such as `cross-encoder/ms-marco-MiniLM-L-6-v2`, after initial retrieval to improve source ordering and provide a relevance signal less sensitive to dominant transcript vocabulary than raw cosine distance.
 - **Dynamic chunking:** Use topic-shift detection to create variable-length chunks based on content rather than fixed segment windows.
-- **Evaluation harness:** Build a small test set covering factual, synthesis, named-entity, vague, and out-of-scope questions to measure retrieval and answer quality.
+- **Formal evaluation harness:** The manual smoke-test script (`tests/test_ask.py`) exercises the five evaluation categories but does not assert pass/fail. A proper test suite with explicit assertions on refusal behavior, source accuracy, and answer grounding would catch regressions automatically rather than requiring manual inspection.
 - **Streaming:** Add optional token streaming for the answer while keeping the same source-return structure.
-- **Minimal UI:** Add a simple web page with a question field and answer/source display for easier manual testing.

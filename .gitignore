@@ -32,3 +32,8 @@ gitignore.txt
 config/models_stable.yaml
 AGENT_BRIEF.md
 .claude/settings.local.json
+# --- One-off diagnostic scripts ---
+debug_lexical.py
+
+# --- Draft files superseded by final versions ---
+readme_fallback_section*.md

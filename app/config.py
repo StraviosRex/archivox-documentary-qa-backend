@@ -11,7 +11,7 @@ MODELS_YAML = Path(__file__).resolve().parent.parent / "config" / "models.yaml"
 
 class Settings(BaseSettings):
     # Default profile
-    llm_profile: str = Field(default="openrouter_llama_free")
+    llm_profile: str = Field(default="groq_llama8b")
 
     # Optional manual overrides
     llm_provider: str = Field(default="")
@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     # Retrieval
     top_k: int = Field(default=5)
     sources_in_response: int = Field(default=3)
-    similarity_threshold: float = Field(default=0.55)
+    similarity_threshold: float = Field(default=0.48)
 
     # Embedding/chunking
     embedding_model: str = Field(default="all-MiniLM-L6-v2")

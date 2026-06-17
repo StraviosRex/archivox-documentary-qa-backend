@@ -11,9 +11,11 @@ Rules:
 - Do not list every relevant timestamp.
 - Do not mention details unless they are supported by the retrieved excerpts.
 - Do not use Markdown formatting. Use plain text only.
+- Never reproduce the bracketed [Excerpt N | timestamp] labels shown in the transcript excerpts below. Those labels are for your reference only and must not appear anywhere in your answer.
+- When referencing a timestamp, write it naturally as part of a sentence, for example "Between 01:01:24 and 01:03:19," never as a bracketed tag like "[Excerpt 1 | 01:01:24 - 01:03:19]".
 
 Answer format:
-- If answerable: begin with one timestamp phrase, then answer directly.
+- If answerable: begin with one natural timestamp phrase, then answer directly.
 - If not answerable: use only the exact refusal sentence."""
 
 

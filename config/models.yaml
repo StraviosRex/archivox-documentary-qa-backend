@@ -5,39 +5,7 @@ profiles:
     model: openrouter/free
     base_url: https://openrouter.ai/api/v1
     api_key_env: OPENROUTER_API_KEY
-
-  openrouter_llama_free:
-    label: "OpenRouter - Llama 3.3 70B Free"
-    provider: openrouter
-    model: meta-llama/llama-3.3-70b-instruct:free
-    base_url: https://openrouter.ai/api/v1
-    api_key_env: OPENROUTER_API_KEY
-    fallback_models:
-      - deepseek/deepseek-r1:free
-      - qwen/qwen3-coder:free
-      - openrouter/free
-
-  openrouter_deepseek_free:
-    label: "OpenRouter - DeepSeek R1 Free"
-    provider: openrouter
-    model: deepseek/deepseek-r1:free
-    base_url: https://openrouter.ai/api/v1
-    api_key_env: OPENROUTER_API_KEY
-    fallback_models:
-      - qwen/qwen3-coder:free
-      - meta-llama/llama-3.3-70b-instruct:free
-      - openrouter/free
-
-  openrouter_qwen_free:
-    label: "OpenRouter - Qwen Coder Free"
-    provider: openrouter
-    model: qwen/qwen3-coder:free
-    base_url: https://openrouter.ai/api/v1
-    api_key_env: OPENROUTER_API_KEY
-    fallback_models:
-      - deepseek/deepseek-r1:free
-      - meta-llama/llama-3.3-70b-instruct:free
-      - openrouter/free
+  
 
   groq_llama8b:
     label: "Groq - Llama 8B"
@@ -52,6 +20,7 @@ profiles:
     model: llama-3.3-70b-versatile
     base_url: https://api.groq.com/openai/v1
     api_key_env: GROQ_API_KEY
+  
 
   gemini_flash:
     label: "Google Gemini Flash"
@@ -65,11 +34,4 @@ profiles:
     provider: ollama
     model: llama3.2:3b
     base_url: http://localhost:11434/v1
-    api_key_env: null
-
-  ollama_qwen25_3b:
-    label: "Ollama - Qwen 2.5 3B Local"
-    provider: ollama
-    model: qwen2.5:3b
-    base_url: http://localhost:11434/v1
-    api_key_env: null
+    api_key_env: null  

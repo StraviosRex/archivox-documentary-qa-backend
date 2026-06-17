@@ -15,7 +15,7 @@ The index is automatically rebuilt if the transcript file, embedding model, or c
 | API | FastAPI + Uvicorn |
 | Embeddings | `all-MiniLM-L6-v2` (sentence-transformers, runs locally) |
 | Vector store | ChromaDB (local persistence) |
-| LLM | Configurable — OpenRouter, Groq, Gemini, Ollama |
+| LLM | Configurable — Groq, OpenRouter, Gemini, Ollama |
 | Config | Pydantic Settings + `.env` + `config/models.yaml` |
 
 ## Quickstart
@@ -34,14 +34,50 @@ The embedding model (`all-MiniLM-L6-v2`) is downloaded automatically on first ru
 cp .env.example .env
 ```
 
-Open `.env` and set the API key for the provider you want to use:
+Open `.env` and set the API key for the provider you want to use. Groq is the default:
 
 ```env
-LLM_PROFILE=openrouter_llama_free
+LLM_PROFILE=groq_llama8b
+GROQ_API_KEY=your_key_here
+```
+
+Groq offers two free models on the same API key, `groq_llama8b` and `groq_llama70b`, each with its own rate limit. OpenRouter also offers free-tier models, with a 20 requests-per-minute limit on the free tier:
+
+```env
+LLM_PROFILE=openrouter_free_router
 OPENROUTER_API_KEY=your_key_here
 ```
 
-See [LLM profiles](#llm-profiles) below for all available options.
+Gemini Flash is available as an additional option, on a separate API key:
+
+```env
+LLM_PROFILE=gemini_flash
+GEMINI_API_KEY=your_key_here
+```
+
+All three keys (`GROQ_API_KEY`, `OPENROUTER_API_KEY`, `GEMINI_API_KEY`) are listed in `.env.example`. Only the key matching your chosen `LLM_PROFILE` is required to run the service; the others are only needed if you switch to a profile using that provider.
+
+**Getting API keys (all free tier):**
+
+- **Groq** — create an account at [console.groq.com](https://console.groq.com), then go to *API Keys* and generate a key. Free tier includes `llama-3.1-8b-instant` (6,000 TPM) and `llama-3.3-70b-versatile` (12,000 TPM) with independent rate limits.
+- **Google Gemini** — sign in at [aistudio.google.com](https://aistudio.google.com), click *Get API key*, and create a key in a new or existing project. Free tier covers Gemini 2.5 Flash with generous daily limits.
+- **OpenRouter** — create an account at [openrouter.ai](https://openrouter.ai), go to *Keys*, and generate a key. Free-tier models (including `openrouter/free`) are available without adding credits.
+
+**Fully local (no API key):** Install [Ollama](https://ollama.com), run `ollama pull llama3.2:3b`, start `ollama serve`, and set `LLM_PROFILE=ollama_llama32_3b`. No internet connection required after the model is downloaded.
+
+**Switching providers** requires no code changes, in either of two ways:
+
+- **Per request, via the web UI.** The "Model profile" dropdown lets you pick any configured profile and shows exactly which provider and model answered, in the "Model Used" panel below the answer.
+- **As the default, via `.env`.** Anything calling `/ask` directly without specifying a `profile` (curl, `tests/test_ask.py`, or an evaluator's own test harness) uses whichever profile is set as `LLM_PROFILE`.
+
+**Available profiles:**
+
+1. `groq_llama8b` (default) / `groq_llama70b` — Groq.
+2. `gemini_flash` — Google.
+3. `openrouter_free_router` — auto-routes to whichever free model OpenRouter has available.
+
+See [LLM profiles](#llm-profiles) below for the full list and how to obtain each provider's API key.
+
 
 ### 3. Add your transcript
 
@@ -100,10 +136,10 @@ Ask a question about the transcript.
       "excerpt": "The real problem is it doesn't get rid of the bacteria, the underlying cause of the acid."
     }
   ],
-  "profile": "openrouter_llama_free",
-  "provider": "openrouter",
-  "model": "meta-llama/llama-3.3-70b-instruct:free",
-  "model_used": "meta-llama/llama-3.3-70b-instruct"
+  "profile": "groq_llama8b",
+  "provider": "groq",
+  "model": "llama-3.1-8b-instant",
+  "model_used": "llama-3.1-8b-instant"
 }
 ```
 
@@ -123,19 +159,16 @@ Profiles are defined in [config/models.yaml](config/models.yaml). The active pro
 
 | Profile ID | Provider | Model |
 |---|---|---|
-| `openrouter_free_router` | OpenRouter | Auto-routed free model |
-| `openrouter_llama_free` | OpenRouter | Llama 3.3 70B (free) |
-| `openrouter_deepseek_free` | OpenRouter | DeepSeek R1 (free) |
-| `openrouter_qwen_free` | OpenRouter | Qwen Coder (free) |
-| `groq_llama8b` | Groq | Llama 3.1 8B |
+| `groq_llama8b` | Groq | Llama 3.1 8B (default) |
 | `groq_llama70b` | Groq | Llama 3.3 70B |
 | `gemini_flash` | Google | Gemini 2.5 Flash |
+| `openrouter_free_router` | OpenRouter | Auto-routed free model |
 | `ollama_llama32_3b` | Ollama (local) | Llama 3.2 3B |
 | `ollama_qwen25_3b` | Ollama (local) | Qwen 2.5 3B |
 
-OpenRouter profiles with fallback models automatically retry on other free models if the primary is unavailable. Ollama profiles require no API key.
+OpenRouter profiles with fallback models automatically retry on other free models if the primary is unavailable. This trades consistency for availability, the underlying model can vary between requests, so it is recommended as a last-resort profile rather than the default. Ollama profiles require no API key but require a local Ollama installation and are not used as the default given typical laptop hardware constraints.
 
-To add a new profile, add an entry to `config/models.yaml` — no code changes needed.
+To add a new profile, add an entry to `config/models.yaml`, no code changes needed.
 
 ## Configuration reference
 
@@ -143,14 +176,14 @@ All settings can be set in `.env`. See [.env.example](.env.example) for the full
 
 | Variable | Default | Description |
 |---|---|---|
-| `LLM_PROFILE` | `openrouter_llama_free` | Active LLM profile from `models.yaml` |
-| `OPENROUTER_API_KEY` | — | OpenRouter API key |
+| `LLM_PROFILE` | `groq_llama8b` | Active LLM profile from `models.yaml` |
 | `GROQ_API_KEY` | — | Groq API key |
+| `OPENROUTER_API_KEY` | — | OpenRouter API key |
 | `GEMINI_API_KEY` | — | Gemini API key |
 | `OLLAMA_BASE_URL` | `http://localhost:11434/v1` | Ollama endpoint |
 | `TOP_K` | `5` | Chunks retrieved per query |
 | `SOURCES_IN_RESPONSE` | `3` | Sources returned in the response |
-| `SIMILARITY_THRESHOLD` | `0.55` | Max cosine distance for a chunk to be included |
+| `SIMILARITY_THRESHOLD` | `0.48` | Max cosine distance for a chunk to be included |
 | `EMBEDDING_MODEL` | `all-MiniLM-L6-v2` | Sentence-transformer model name |
 | `CHUNK_WINDOW_SIZE` | `3` | Transcript segments per chunk |
 | `CHUNK_OVERLAP` | `1` | Overlapping segments between consecutive chunks |

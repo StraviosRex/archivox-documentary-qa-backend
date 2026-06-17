@@ -16,6 +16,15 @@ logger = logging.getLogger(__name__)
 COLLECTION_NAME = "transcript"
 INDEX_METADATA_FILE = "index_metadata.json"
 
+# Minimum lexical score required for a chunk to survive on lexical grounds
+# alone. Set to match the proper-name match weight, so a chunk only passes
+# via a full query-substring match (10.0) or at least one proper-name phrase
+# match (8.0). Accumulated generic single-term matches (1.0 each) can no
+# longer qualify a chunk by themselves, since common domain vocabulary
+# (e.g. "Victorian", "household") appears throughout the transcript
+# regardless of what a specific question is actually asking about.
+MIN_LEXICAL_SCORE = 8.0
+
 _collection: chromadb.Collection | None = None
 
 
@@ -199,7 +208,15 @@ def _lexical_search(
     query: str,
     limit: int,
 ) -> list[dict]:
-    """Search all stored chunks using simple lexical matching."""
+    """
+    Search all stored chunks using lexical matching.
+
+    Only chunks that clear MIN_LEXICAL_SCORE are admitted. This keeps the
+    fallback effective for its intended purpose, exact names, places, and
+    full-phrase matches, while preventing chunks from qualifying purely on
+    accumulated common-word overlap, which provides no real evidence of
+    relevance for a transcript where that vocabulary appears throughout.
+    """
     results = collection.get(include=["documents", "metadatas"])
 
     ids = results.get("ids", [])
@@ -211,7 +228,7 @@ def _lexical_search(
     for i, text in enumerate(documents):
         score = _lexical_score(query, text)
 
-        if score <= 0:
+        if score < MIN_LEXICAL_SCORE:
             continue
 
         metadata = metadatas[i] or {}
@@ -287,11 +304,24 @@ def _passes_similarity_threshold(chunk: dict) -> bool:
     """
     Decide whether a chunk clears the similarity bar.
 
-    Chunks found only through lexical matching have no distance value and
-    are kept regardless, since they were already validated by exact keyword
-    or proper-name presence rather than embedding similarity. Chunks with a
-    distance (dense or hybrid) must fall within the configured threshold.
+    A chunk is kept if either signal independently validates it:
+    - it has no distance at all (pure lexical match), or
+    - its lexical score already clears MIN_LEXICAL_SCORE, even if it also
+      has a dense distance from being found by both methods (hybrid), or
+    - its dense distance falls within the configured threshold.
+
+    Without the lexical_score check here, a chunk found by both dense and
+    lexical search (hybrid) could be wrongly rejected on dense distance
+    alone, even though the lexical match alone would have been strong
+    enough to admit it on its own. Being found by both methods is a
+    stronger relevance signal, not a weaker one, and should not be
+    penalized relative to a pure lexical match.
     """
+    lexical_score = chunk.get("lexical_score") or 0
+
+    if lexical_score >= MIN_LEXICAL_SCORE:
+        return True
+
     distance = chunk.get("distance")
 
     if distance is None:
@@ -360,16 +390,6 @@ def retrieve(query: str, top_k: int | None = None) -> list[dict]:
                 "retrieval_method": "dense",
             }
         )
-
-        # --- TEMPORARY DEBUG LOGGING: remove once threshold is tuned ---
-        logger.info(
-            "DEBUG rank=%d distance=%.4f ts=%s preview=%.70r",
-            i + 1,
-            distances[i],
-            metadata.get("start_timestamp", ""),
-            documents[i],
-        )
-        # --- END TEMPORARY DEBUG LOGGING ---
 
     lexical_chunks = _lexical_search(
         collection=collection,

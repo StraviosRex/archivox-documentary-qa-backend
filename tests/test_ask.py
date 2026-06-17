@@ -22,6 +22,14 @@ import json
 
 BASE_URL = "http://localhost:8000"
 
+# Delay between requests, in seconds. Groq's free tier enforces a tokens-
+# per-minute budget; firing all five questions back to back can exhaust it
+# partway through this script, since each question's retrieved context plus
+# generated answer consumes a meaningful share of that budget. This delay
+# is a test-script convenience only, the production /ask endpoint itself
+# does not rate-limit or pace requests.
+DELAY_BETWEEN_REQUESTS_SECONDS = 8
+
 QUESTIONS = [
     {
         "type": "1. Factual",
@@ -59,7 +67,11 @@ async def run_tests():
             return
 
         # Run each question
-        for q in QUESTIONS:
+        for i, q in enumerate(QUESTIONS):
+            if i > 0:
+                print(f"(waiting {DELAY_BETWEEN_REQUESTS_SECONDS}s to avoid provider rate limits...)\n")
+                await asyncio.sleep(DELAY_BETWEEN_REQUESTS_SECONDS)
+
             print(f"{'='*60}")
             print(f"[{q['type']}]")
             print(f"Q: {q['question']}")

@@ -168,6 +168,16 @@
 
     <div id="status" class="status"></div>
 
+    <div id="answerBox" class="answer-box hidden">
+      <h2>Answer</h2>
+      <div id="answer" class="answer"></div>
+    </div>
+
+    <div id="sourcesBox" class="sources-box hidden">
+      <h2>Sources</h2>
+      <div id="sources"></div>
+    </div>
+
     <div id="metaBox" class="meta-box hidden">
       <h2>Model Used</h2>
       <div class="meta-grid">
@@ -183,16 +193,6 @@
         <div class="meta-label">Actual model</div>
         <div id="metaModelUsed"></div>
       </div>
-    </div>
-
-    <div id="answerBox" class="answer-box hidden">
-      <h2>Answer</h2>
-      <div id="answer" class="answer"></div>
-    </div>
-
-    <div id="sourcesBox" class="sources-box hidden">
-      <h2>Sources</h2>
-      <div id="sources"></div>
     </div>
   </div>
 
@@ -348,9 +348,9 @@
 
         const data = await response.json();
 
-        renderMeta(data);
         renderAnswer(data.answer);
         renderSources(data.sources);
+        renderMeta(data);
 
         setStatus("");
       } catch (error) {
