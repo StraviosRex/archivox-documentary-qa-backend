@@ -30,8 +30,8 @@ profiles:
     api_key_env: GEMINI_API_KEY
 
   ollama_llama32_3b:
-  label: "Ollama - Llama 3.2 3B Local"
-  provider: ollama
-  model: llama3.2:3b
-  base_url: http://host.docker.internal:11434/v1
-  api_key_env: null
+    label: "Ollama - Llama 3.2 3B Local"
+    provider: ollama
+    model: llama3.2:3b
+    base_url: http://host.docker.internal:11434/v1
+    api_key_env: null
