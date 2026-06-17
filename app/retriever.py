@@ -16,13 +16,12 @@ logger = logging.getLogger(__name__)
 COLLECTION_NAME = "transcript"
 INDEX_METADATA_FILE = "index_metadata.json"
 
-# Minimum lexical score required for a chunk to survive on lexical grounds
-# alone. Set to match the proper-name match weight, so a chunk only passes
-# via a full query-substring match (10.0) or at least one proper-name phrase
-# match (8.0). Accumulated generic single-term matches (1.0 each) can no
-# longer qualify a chunk by themselves, since common domain vocabulary
-# (e.g. "Victorian", "household") appears throughout the transcript
-# regardless of what a specific question is actually asking about.
+# Minimum score for a chunk to pass keyword search by itself.
+# We set this to 8.0 so a chunk must contain either a full phrase match (10.0)
+# or a specific proper-name match (8.0) to pass. 
+# This stops a pile of random single-word matches (1.0 each) from letting 
+# irrelevant chunks slip through just because they repeat common words 
+# like "Victorian" or "household" that appear everywhere in the transcript.
 MIN_LEXICAL_SCORE = 8.0
 
 _collection: chromadb.Collection | None = None
