@@ -109,12 +109,16 @@ The Chroma index is stored in a named volume (`chroma_data`) so it persists acro
 ## Screenshots
 
 **Answering a question with grounded sources**
+
 ![Frontend answer view](assets/frontend1.png)
 
+
 **Model profile selection**
+
 ![Model selection dropdown](assets/frontend2.png)
 
 **Out-of-scope refusal**
+
 ![Out-of-scope rejection](assets/frontend3.png)
 
 ## API
