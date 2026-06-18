@@ -1101,7 +1101,7 @@ def _select_diverse_sources(
         if candidate["id"] in selected_ids:
             continue
 
-        if candidate["relevance_score"] < minimum_score:
+        if minimum_score is not None and candidate["relevance_score"] < minimum_score:
             continue
 
         selected.append(candidate)
@@ -1119,8 +1119,11 @@ def retrieve(
 
     Factual questions use the strongest result and its immediate transcript
     neighbors. Broad or explicit synthesis questions may select evidence from
-    distinct transcript regions, but only after each chunk passes relevance
-    filtering.
+    distinct transcript regions, each passing relevance filtering.
+
+    Neighbor chunks are context expansion — they are attached to an anchor
+    that passed relevance filtering, but do not independently pass it
+    themselves. They are marked with context_neighbor=True.
     """
     query = query.strip()
 
