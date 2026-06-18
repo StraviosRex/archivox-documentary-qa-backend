@@ -101,10 +101,11 @@ The transcript is indexed on startup. Open `http://localhost:8000` for the web U
 ## Docker
 
 ```bash
+cp .env.example .env   # then add your API key
 docker compose up --build
 ```
 
-The Chroma index is stored in a named volume (`chroma_data`) so it persists across container restarts.
+The first build downloads CPU-only PyTorch and both ML models (`all-MiniLM-L6-v2` and `cross-encoder/ms-marco-MiniLM-L-6-v2`) into the image layers — this takes a few minutes but is cached for all subsequent builds. On first startup the transcript is indexed into a named volume (`chroma_data`), which persists across container restarts so subsequent starts are fast.
 
 ## Performance
 
@@ -141,18 +142,21 @@ See [benchmarks.md](benchmarks.md) for full phase-by-phase results, CE on/off co
 
 ## Screenshots
 
-**Answering a question with grounded sources**
+**Factual question with grounded sources and model info**
 
-![Frontend answer view](assets/frontend1.png)
+![Factual answer with sources](assets/frontend01.png)
 
+**Out-of-scope refusal — no sources returned**
 
-**Model profile selection**
+![Out-of-scope refusal](assets/frontend02.png)
 
-![Model selection dropdown](assets/frontend2.png)
+**Multi-topic query — all three topics retrieved**
 
-**Out-of-scope refusal**
+![Multi-topic answer covering Borax, Celluloid, and Asbestos](assets/frontend03.png)
 
-![Out-of-scope rejection](assets/frontend3.png)
+**Interactive API docs (`/docs`)**
+
+![Swagger UI with JSON response](assets/frontend04.png)
 
 ## API
 
