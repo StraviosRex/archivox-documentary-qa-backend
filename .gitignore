@@ -30,6 +30,7 @@ Thumbs.db
 *copy*.py
 *copy*.yaml
 DESIGN(*).md
+RETRIEVAL_REFACTORING_PLAN.md
 *.example1.example
 gitignore.txt
 config/models_stable.yaml
@@ -38,6 +39,7 @@ AGENT_BRIEF.md
 tasks.md
 prompt.py.bak
 todo.md
+projecttodo.md
 # --- One-off diagnostic scripts ---
 debug_lexical.py
 *.bak

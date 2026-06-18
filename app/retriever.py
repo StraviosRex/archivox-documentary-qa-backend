@@ -2,6 +2,7 @@ import hashlib
 import json
 import logging
 import re
+import time
 from pathlib import Path
 from typing import Any
 
@@ -26,7 +27,8 @@ TOP_DENSE_SOFT_MARGIN = 0.05
 
 _CE_LOCAL = Path(__file__).parent.parent / "models" / "cross-encoder" / "ms-marco-MiniLM-L-6-v2"
 CROSS_ENCODER_MODEL = str(_CE_LOCAL) if _CE_LOCAL.exists() else "cross-encoder/ms-marco-MiniLM-L-6-v2"
-CROSS_ENCODER_THRESHOLD = -3.0
+CROSS_ENCODER_THRESHOLD = -4.5
+CE_LITERAL_INJECTION_CAP = 15
 RERANKING_ENABLED = settings.reranking_enabled
 
 _cross_encoder: CrossEncoder | None = None
@@ -663,6 +665,15 @@ def _apply_cross_encoder(
 
     candidates.sort(key=lambda c: c["cross_encoder_score"], reverse=True)
 
+    for chunk in candidates:
+        logger.debug(
+            "CE score=%.3f sources=%s ts=%s terms=%s",
+            chunk["cross_encoder_score"],
+            chunk.get("candidate_sources", []),
+            chunk.get("start_timestamp", "?"),
+            chunk.get("matched_terms", []),
+        )
+
     return candidates
 
 
@@ -700,6 +711,12 @@ def _build_candidates(
     lexical_candidates = lexical_candidates[
         :candidate_limit
     ]
+
+    logger.info(
+        "Candidates: dense=%s lexical=%s",
+        len(dense_chunks),
+        len(lexical_candidates),
+    )
 
     candidate_ids = set(dense_chunks)
     candidate_ids.update(
@@ -762,13 +779,12 @@ def _passes_relevance_filter(
     chunk: dict[str, Any],
 ) -> bool:
     """Return True when a candidate is sufficiently relevant."""
-    if chunk.get("force_include"):
-        return True
-
     ce_score = chunk.get("cross_encoder_score")
-    if ce_score is not None and ce_score >= CROSS_ENCODER_THRESHOLD:
-        return True
+    if ce_score is not None:
+        # CE is authoritative — no other signal overrides it.
+        return ce_score >= CROSS_ENCODER_THRESHOLD
 
+    # CE unavailable (reranking disabled): fall back to lexical and dense signals.
     if _has_strong_lexical_match(chunk):
         return True
 
@@ -947,8 +963,12 @@ def _select_local_sources(
         selected.append(neighbor)
         selected_ids.add(neighbor["id"])
 
+    # When CE is active, all chunks in `relevant` already passed the CE
+    # threshold — trust CE ranking and skip the old fused-score gate.
+    anchor_ce = anchor.get("cross_encoder_score")
     minimum_score = (
-        anchor["relevance_score"] * 0.65
+        None if anchor_ce is not None
+        else anchor["relevance_score"] * 0.65
     )
 
     for candidate in relevant[1:]:
@@ -958,7 +978,7 @@ def _select_local_sources(
         if candidate["id"] in selected_ids:
             continue
 
-        if candidate["relevance_score"] < minimum_score:
+        if minimum_score is not None and candidate["relevance_score"] < minimum_score:
             continue
 
         selected.append(candidate)
@@ -987,8 +1007,12 @@ def _select_diverse_sources(
     selected_ids = {anchor["id"]}
     covered_terms = set(anchor["matched_terms"])
 
+    # When CE is active, all chunks in `relevant` already passed the CE
+    # threshold — trust CE ranking and skip the old fused-score gate.
+    anchor_ce = anchor.get("cross_encoder_score")
     minimum_score = (
-        anchor["relevance_score"] * 0.45
+        None if anchor_ce is not None
+        else anchor["relevance_score"] * 0.45
     )
 
     literal_query_terms = _extract_literal_query_terms(query)
@@ -1012,10 +1036,7 @@ def _select_diverse_sources(
         if candidate["id"] in selected_ids:
             continue
 
-        if (
-            not candidate.get("force_include")
-            and candidate["relevance_score"] < minimum_score
-        ):
+        if minimum_score is not None and candidate["relevance_score"] < minimum_score:
             continue
 
         candidate_terms = set(
@@ -1155,48 +1176,67 @@ def retrieve(
         [(c.get("id"), c.get("era")) for c in all_chunks[:3]],
     )
 
+    t0 = time.perf_counter()
+
+    t_dense_start = time.perf_counter()
     dense_chunks = _dense_results(
         collection=collection,
         query=query,
         candidate_limit=candidate_limit,
     )
-
     if excluded_era:
         dense_chunks = {
             k: v for k, v in dense_chunks.items()
             if v.get("era") != excluded_era
         }
+    t_dense_ms = round((time.perf_counter() - t_dense_start) * 1000)
 
+    t_build_start = time.perf_counter()
     candidates = _build_candidates(
         query=query,
         all_chunks=all_chunks,
         dense_chunks=dense_chunks,
         candidate_limit=candidate_limit,
     )
+    t_build_ms = round((time.perf_counter() - t_build_start) * 1000)
 
+    t_ce_start = time.perf_counter()
     if RERANKING_ENABLED:
-        # Inject literal query-term matches before CE scoring so we only score
-        # the combined set (~30-40 chunks) instead of the entire corpus.
+        # Inject literal query-term matches using token-based matching so only
+        # exact word forms qualify (not substrings of longer words).
         candidate_ids = {c["id"] for c in candidates}
         literal_terms = _extract_literal_query_terms(query)
+        literal_injections: list[dict[str, Any]] = []
         for chunk in all_chunks:
-            if chunk["id"] not in candidate_ids and any(
-                term in chunk["text"].lower() for term in literal_terms
-            ):
+            if chunk["id"] in candidate_ids:
+                continue
+            chunk_tokens = set(_tokens(chunk["text"]))
+            if any(term in chunk_tokens for term in literal_terms):
                 decorated = _decorate_chunk(query=query, chunk=chunk)
-                decorated["force_include"] = True
-                candidates.append(decorated)
-                candidate_ids.add(chunk["id"])
+                decorated["candidate_sources"] = ["literal"]
+                literal_injections.append(decorated)
 
+        # Cap injections to avoid flooding the CE pool with noise (e.g. a
+        # common word like "dangers" matching dozens of unrelated chunks).
+        literal_injections.sort(key=lambda c: -c["relevance_score"])
+        for inj in literal_injections[:CE_LITERAL_INJECTION_CAP]:
+            candidates.append(inj)
+            candidate_ids.add(inj["id"])
+
+        ce_candidate_count = len(candidates)
         _apply_cross_encoder(query=query, candidates=candidates)
+        # _apply_cross_encoder sorts candidates in-place; no second sort needed.
+    else:
+        ce_candidate_count = 0
+    t_ce_ms = round((time.perf_counter() - t_ce_start) * 1000)
 
-        candidates.sort(key=lambda c: c.get("cross_encoder_score", -999.0), reverse=True)
-
+    t_filter_start = time.perf_counter()
     relevant = [
         candidate
         for candidate in candidates
         if _passes_relevance_filter(candidate)
     ]
+    t_filter_ms = round((time.perf_counter() - t_filter_start) * 1000)
 
     use_diverse = _needs_diverse_evidence(query)
 
@@ -1210,6 +1250,7 @@ def retrieve(
     ):
         use_diverse = False
 
+    t_select_start = time.perf_counter()
     if use_diverse:
         selected = _select_diverse_sources(
             query=query,
@@ -1226,19 +1267,32 @@ def retrieve(
             top_k=top_k,
         )
         mode = "local"
+    t_select_ms = round((time.perf_counter() - t_select_start) * 1000)
+
+    t_total_ms = round((time.perf_counter() - t0) * 1000)
+    context_chars = sum(len(c["text"]) for c in selected)
 
     logger.info(
         (
             "Retrieval completed. mode=%s "
-            "dense_candidates=%s candidates=%s "
-            "relevant_candidates=%s selected_chunks=%s "
+            "dense=%s merged=%s ce_pool=%s relevant=%s selected=%s "
+            "context_chars=%s "
+            "dense_ms=%s build_ms=%s ce_ms=%s filter_ms=%s select_ms=%s total_ms=%s "
             "ce_top_score=%s"
         ),
         mode,
         len(dense_chunks),
         len(candidates),
+        ce_candidate_count,
         len(relevant),
         len(selected),
+        context_chars,
+        t_dense_ms,
+        t_build_ms,
+        t_ce_ms,
+        t_filter_ms,
+        t_select_ms,
+        t_total_ms,
         round(candidates[0]["cross_encoder_score"], 3) if candidates and "cross_encoder_score" in candidates[0] else None,
     )
 
