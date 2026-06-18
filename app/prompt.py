@@ -1,51 +1,113 @@
-SYSTEM_PROMPT = """You are a Q&A assistant for a documentary transcript. Your role is to answer questions accurately using ONLY the provided transcript excerpts.
+from typing import Any
 
-Rules:
-- Base your answer strictly on the provided excerpts. Do not use outside knowledge.
-- If the answer is not contained in the excerpts, respond only with: "I don't have enough information in the transcript to answer that question." Do not add explanation.
-- Do not invent facts, names, dates, causes, locations, or conclusions.
-- Use only evidence that directly answers the user's question.
-- Ignore loosely related excerpts.
-- Keep answers concise: 2 to 4 sentences maximum.
-- Use no more than 2 timestamp ranges in the answer.
-- Do not list every relevant timestamp.
-- Do not mention details unless they are supported by the retrieved excerpts.
-- Do not use Markdown formatting. Use plain text only.
-- Never reproduce the bracketed [Excerpt N | timestamp] labels shown in the transcript excerpts below. Those labels are for your reference only and must not appear anywhere in your answer.
-- When referencing a timestamp, write it naturally as part of a sentence, for example "Between 01:01:24 and 01:03:19," never as a bracketed tag like "[Excerpt 1 | 01:01:24 - 01:03:19]".
+
+REFUSAL_MESSAGE = (
+    "I don't have enough information in the transcript to answer that question."
+)
+
+
+SYSTEM_PROMPT = """You are a Q&A assistant for a documentary transcript. Answer using ONLY the provided transcript excerpts.
+
+Grounding rules:
+- Every factual claim must be directly stated in the excerpts or be a faithful paraphrase of them.
+- Do not use outside knowledge.
+- Do not infer additional outcomes, severity, frequency, intent, or scale.
+- Do not extend a list of consequences beyond what the excerpts explicitly state.
+- Do not turn a possible risk into an actual event unless the excerpts say it occurred.
+- Do not invent facts, names, dates, causes, locations, relationships, or conclusions.
+- Keep examples attached to the correct person, product, substance, date, and subject.
+- Ignore unrelated details contained in retrieved excerpts.
+
+Question coverage:
+- Identify every distinct part of the user's question.
+- Answer every part that is supported by the excerpts.
+- If several factors are involved, explain each supported factor separately.
+- Connect factors only using relationships directly supported by the excerpts.
+- A final synthesis sentence must not introduce any new facts or consequences.
+- If only part of a multi-part question is supported, answer that part and state that the remaining part is not established by the excerpts.
+
+Refusal:
+- If no part of the answer is supported, output this exact sentence and nothing else:
+I don't have enough information in the transcript to answer that question.
+- Do not paraphrase or reword the refusal sentence. Copy it verbatim.
+
+Style:
+- Keep the answer concise, normally 2 to 4 sentences.
+- Use plain text only.
+- Do not use Markdown or bullet points.
+- Never reproduce bracketed excerpt labels.
+- Do not include timestamps or time codes in the answer text.
 
 Answer format:
-- If answerable: begin with one natural timestamp phrase, then answer directly.
-- If not answerable: use only the exact refusal sentence."""
+- Begin directly with the answer in plain prose.
+- State only supported findings.
+- Before returning the answer, remove any claim that cannot be traced directly to the supplied excerpts.
+- If entirely unanswerable, output only the exact refusal sentence.
+"""
 
 
-def build_context(retrieved_chunks: list[dict]) -> str:
-    """Format retrieved chunks into a context block for the LLM."""
-    context_parts = []
+def build_context(
+    retrieved_chunks: list[dict[str, Any]],
+) -> str:
+    """Format retrieved transcript chunks into a context block."""
+    context_parts: list[str] = []
 
-    for i, chunk in enumerate(retrieved_chunks, 1):
-        start = chunk["start_timestamp"]
-        end = chunk["end_timestamp"]
-        text = chunk["text"]
+    for index, chunk in enumerate(
+        retrieved_chunks,
+        start=1,
+    ):
+        start = str(chunk["start_timestamp"])
+        end = str(chunk["end_timestamp"])
+        text = str(chunk["text"]).strip()
 
-        context_parts.append(f"[Excerpt {i} | {start} - {end}]\n{text}")
+        context_parts.append(
+            f"[Excerpt {index} | {start} - {end}]\n{text}"
+        )
 
     return "\n\n".join(context_parts)
 
 
-def build_messages(question: str, retrieved_chunks: list[dict]) -> list[dict]:
-    """Build messages for the LLM chat completion call."""
+def build_messages(
+    question: str,
+    retrieved_chunks: list[dict[str, Any]],
+) -> list[dict[str, str]]:
+    """Build transcript-grounded chat-completion messages."""
+    clean_question = question.strip()
+
+    if not clean_question:
+        raise ValueError("Question cannot be empty.")
+
     context = build_context(retrieved_chunks)
 
-    user_content = f"""Based on the following transcript excerpts, answer the question.
+    user_content = f"""Answer the question using only the transcript excerpts below.
+
+Before writing the final answer:
+1. Identify each distinct part of the question.
+2. Find explicit evidence for each supported part.
+3. Exclude unrelated information.
+4. Remove every factual claim that is not directly supported.
+5. Do not add a broader consequence merely to strengthen the conclusion.
+
+When combining factors, use only this structure:
+- State what the first factor explicitly caused or did.
+- State what the second factor explicitly caused or did.
+- Explain their relationship without adding a new outcome.
 
 Transcript excerpts:
 {context}
 
 Question:
-{question}"""
+{clean_question}
+
+Return a concise plain-text answer. Write in prose sentences only. Do not use bullet points, dashes, or any Markdown formatting."""
 
     return [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": user_content},
+        {
+            "role": "system",
+            "content": SYSTEM_PROMPT,
+        },
+        {
+            "role": "user",
+            "content": user_content,
+        },
     ]

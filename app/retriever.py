@@ -11,18 +11,83 @@ from app.chunker import load_and_chunk
 from app.config import settings
 from app.embedder import embed_query, embed_texts
 
+
 logger = logging.getLogger(__name__)
 
 COLLECTION_NAME = "transcript"
 INDEX_METADATA_FILE = "index_metadata.json"
 
-# Minimum score for a chunk to pass keyword search by itself.
-# We set this to 8.0 so a chunk must contain either a full phrase match (10.0)
-# or a specific proper-name match (8.0) to pass. 
-# This stops a pile of random single-word matches (1.0 each) from letting 
-# irrelevant chunks slip through just because they repeat common words 
-# like "Victorian" or "household" that appear everywhere in the transcript.
-MIN_LEXICAL_SCORE = 8.0
+CANDIDATE_MULTIPLIER = 4
+MIN_DENSE_CANDIDATES = 12
+MAX_RETURNED_SOURCES = 3
+TOP_DENSE_SOFT_MARGIN = 0.05
+
+TOKEN_PATTERN = re.compile(
+    r"[A-Za-z]+(?:'[A-Za-z]+)?|\d[\d,]*"
+)
+
+PROPER_NAME_PATTERN = re.compile(
+    r"\b[A-Z][A-Za-z.'’-]*"
+    r"(?:\s+[A-Z][A-Za-z.'’-]*)+\b"
+)
+
+CAPITALIZED_TERM_PATTERN = re.compile(
+    r"\b[A-Z][A-Za-z.'’-]*\b"
+)
+
+STOPWORDS = {
+    "a", "about", "an", "and", "are", "as", "at", "be", "been", "being",
+    "by", "did", "do", "does", "for", "from", "had", "has", "have", "he",
+    "her", "hers", "him", "his", "how", "in", "into", "is", "it", "its",
+    "many", "much", "of", "on", "or", "our", "she", "that", "the", "their",
+    "theirs", "them", "these", "they", "this", "those", "to", "was", "were",
+    "what", "when", "where", "which", "who", "whom", "whose", "why", "with",
+    "would", "documentary", "transcript",
+}
+
+CONCEPT_ALIASES = {
+    "legislation": (
+        "law",
+        "laws",
+        "regulation",
+        "regulations",
+    ),
+    "weak": (
+        "not very strong",
+        "not particularly effective",
+        "ineffective",
+        "difficult to police",
+        "difficult to prove",
+    ),
+}
+
+QUESTION_WORDS = {
+    "what", "who", "why", "how", "when",
+    "where", "which", "whose", "whom",
+}
+
+DIVERSE_EVIDENCE_MARKERS = (
+    "both ", " together", "compare ", "compared ", "comparison", "respectively", "across ",
+    "different ways", "various ways", "overall", "in general", "throughout",
+    "everyday life", "multiple factors", "differ ", "different from", "difference",
+    "versus", "vs ",
+)
+
+BOTH_SUBJECT_PATTERN = re.compile(
+    r"\bboth\s+(.+?)\s+and\s+(.+?)(?:[?!.]|$)",
+    re.IGNORECASE,
+)
+
+EXPLICIT_COMPARISON_MARKERS = (
+    "compare ",
+    "compared ",
+    "comparison",
+    "differ ",
+    "different from",
+    "difference",
+    "versus",
+    "vs ",
+)
 
 _collection: chromadb.Collection | None = None
 
@@ -39,70 +104,84 @@ def _transcript_hash(path: str) -> str:
 
     digest = hashlib.sha256()
 
-    with open(transcript_path, "rb") as f:
-        for block in iter(lambda: f.read(1024 * 1024), b""):
+    with open(transcript_path, "rb") as file:
+        for block in iter(
+            lambda: file.read(1024 * 1024),
+            b"",
+        ):
             digest.update(block)
 
     return digest.hexdigest()
 
 
 def _metadata_path() -> Path:
+    """Return the path used for persisted index metadata."""
     persist_dir = Path(settings.chroma_persist_dir)
     persist_dir.mkdir(parents=True, exist_ok=True)
+
     return persist_dir / INDEX_METADATA_FILE
 
 
 def _current_index_metadata() -> dict[str, Any]:
-    """Build metadata describing the current index inputs/settings."""
+    """Describe the current inputs used to build the vector index."""
     return {
         "transcript_path": str(Path(settings.transcript_path)),
         "transcript_hash": _transcript_hash(settings.transcript_path),
         "embedding_model": settings.embedding_model,
         "chunk_window_size": settings.chunk_window_size,
         "chunk_overlap": settings.chunk_overlap,
+        "index_version": "3",
     }
 
 
 def _load_saved_index_metadata() -> dict[str, Any] | None:
+    """Load previously saved index metadata."""
     path = _metadata_path()
 
     if not path.exists():
         return None
 
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
+    with open(path, "r", encoding="utf-8") as file:
+        return json.load(file)
 
 
 def _save_index_metadata(metadata: dict[str, Any]) -> None:
+    """Persist index metadata to disk."""
     path = _metadata_path()
 
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(metadata, f, indent=2)
+    with open(path, "w", encoding="utf-8") as file:
+        json.dump(metadata, file, indent=2)
 
 
 def _index_needs_rebuild() -> bool:
-    saved = _load_saved_index_metadata()
-    current = _current_index_metadata()
-
-    return saved != current
+    """Return True when the stored index no longer matches its inputs."""
+    return _load_saved_index_metadata() != _current_index_metadata()
 
 
 def get_collection() -> chromadb.Collection:
-    """Get or create the ChromaDB collection, rebuilding stale indexes."""
+    """Get or create the persistent ChromaDB collection."""
     global _collection
 
     if _collection is not None:
         return _collection
 
-    client = chromadb.PersistentClient(path=settings.chroma_persist_dir)
+    client = chromadb.PersistentClient(
+        path=settings.chroma_persist_dir
+    )
 
     if _index_needs_rebuild():
-        logger.info("Transcript index is missing or stale. Rebuilding ChromaDB index.")
+        logger.info(
+            "Transcript index is missing or stale. "
+            "Rebuilding ChromaDB index."
+        )
 
         try:
             client.delete_collection(name=COLLECTION_NAME)
         except Exception:
-            pass
+            logger.debug(
+                "No existing ChromaDB collection needed deletion.",
+                exc_info=True,
+            )
 
     collection = client.get_or_create_collection(
         name=COLLECTION_NAME,
@@ -114,10 +193,13 @@ def get_collection() -> chromadb.Collection:
         _save_index_metadata(_current_index_metadata())
 
     _collection = collection
+
     return _collection
 
 
-def _index_transcript(collection: chromadb.Collection) -> None:
+def _index_transcript(
+    collection: chromadb.Collection,
+) -> None:
     """Parse, chunk, embed, and store the transcript."""
     chunks = load_and_chunk(
         settings.transcript_path,
@@ -127,14 +209,18 @@ def _index_transcript(collection: chromadb.Collection) -> None:
 
     if not chunks:
         raise RuntimeError(
-            f"No transcript chunks were created from {settings.transcript_path}."
+            "No transcript chunks were created from "
+            f"{settings.transcript_path}."
         )
 
     texts = [chunk.text for chunk in chunks]
     embeddings = embed_texts(texts)
 
     collection.add(
-        ids=[f"chunk_{chunk.index}" for chunk in chunks],
+        ids=[
+            f"chunk_{chunk.index}"
+            for chunk in chunks
+        ],
         embeddings=embeddings,
         documents=texts,
         metadatas=[
@@ -144,205 +230,795 @@ def _index_transcript(collection: chromadb.Collection) -> None:
                 "index": chunk.index,
                 "segment_start_index": chunk.segment_start_index,
                 "segment_end_index": chunk.segment_end_index,
+                "era": chunk.era,
             }
             for chunk in chunks
         ],
     )
 
-    logger.info("Indexed %s chunks into ChromaDB.", len(chunks))
+    logger.info(
+        "Indexed %s chunks into ChromaDB.",
+        len(chunks),
+    )
 
 
-def _tokenize_query(query: str) -> list[str]:
-    """Extract useful lowercase query terms for lexical fallback."""
-    stopwords = {
-        "the", "a", "an", "and", "or", "of", "to", "in", "on", "for", "with",
-        "was", "were", "is", "are", "did", "do", "does", "what", "who", "why",
-        "how", "about", "he", "she", "it", "they", "his", "her", "their",
-        "this", "that", "these", "those", "documentary", "transcript",
-        "contribute", "contributed", "contribution", "safety", "safe",
+def _normalize_token(token: str) -> str:
+    """Normalize a word or numerical token."""
+    normalized = token.strip().lower()
 
-        # Generic documentary/domain words that are too broad for lexical ranking.
-        "victorian", "victorians",
-        "home", "homes", "house", "houses",
-        "danger", "dangers", "dangerous",
-        "new", "ideas", "idea", "led", "lead",
-    }
+    if not normalized:
+        return ""
 
-    terms = re.findall(r"[A-Za-z][A-Za-z0-9']+", query.lower())
-    return [term for term in terms if len(term) > 2 and term not in stopwords]
+    if normalized[0].isdigit():
+        return re.sub(r"\D", "", normalized)
+
+    return normalized.strip("'")
 
 
-def _proper_name_phrases(query: str) -> list[str]:
-    """Extract proper-name phrases such as 'Thomas Crapper'."""
-    return re.findall(r"\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+\b", query)
+def _tokens(text: str) -> list[str]:
+    """Extract normalized word and numerical tokens."""
+    normalized_tokens: list[str] = []
+
+    for raw_token in TOKEN_PATTERN.findall(text):
+        token = _normalize_token(raw_token)
+
+        if token:
+            normalized_tokens.append(token)
+
+    return normalized_tokens
 
 
-def _lexical_score(query: str, text: str) -> float:
-    """
-    Simple lexical score for exact-name and rare-term fallback.
+def _query_terms(query: str) -> list[str]:
+    """Extract meaningful query terms, preserving dates and numbers."""
+    terms: list[str] = []
 
-    Higher score means stronger lexical match.
-    """
-    query_lower = query.lower()
-    text_lower = text.lower()
-
-    score = 0.0
-
-    if query_lower in text_lower:
-        score += 10.0
-
-    for phrase in _proper_name_phrases(query):
-        if phrase.lower() in text_lower:
-            score += 8.0
-
-    for term in _tokenize_query(query):
-        if term in text_lower:
-            score += 1.0
-
-    return score
-
-
-def _lexical_search(
-    collection: chromadb.Collection,
-    query: str,
-    limit: int,
-) -> list[dict]:
-    """
-    Search all stored chunks using lexical matching.
-
-    Only chunks that clear MIN_LEXICAL_SCORE are admitted. This keeps the
-    fallback effective for its intended purpose, exact names, places, and
-    full-phrase matches, while preventing chunks from qualifying purely on
-    accumulated common-word overlap, which provides no real evidence of
-    relevance for a transcript where that vocabulary appears throughout.
-    """
-    results = collection.get(include=["documents", "metadatas"])
-
-    ids = results.get("ids", [])
-    documents = results.get("documents", [])
-    metadatas = results.get("metadatas", [])
-
-    scored: list[tuple[float, dict]] = []
-
-    for i, text in enumerate(documents):
-        score = _lexical_score(query, text)
-
-        if score < MIN_LEXICAL_SCORE:
+    for token in _tokens(query):
+        if token.isdigit():
+            terms.append(token)
             continue
 
-        metadata = metadatas[i] or {}
+        if len(token) <= 2:
+            continue
 
-        scored.append(
+        if token in STOPWORDS:
+            continue
+
+        terms.append(token)
+
+    return list(dict.fromkeys(terms))
+
+
+def _normalize_phrase(text: str) -> str:
+    """Normalize text for phrase comparison."""
+    return " ".join(_tokens(text))
+
+
+def _proper_names(query: str) -> list[str]:
+    """Extract useful multiword proper-name phrases."""
+    names: list[str] = []
+
+    for phrase in PROPER_NAME_PATTERN.findall(query):
+        phrase_tokens = _tokens(phrase)
+
+        if not phrase_tokens:
+            continue
+
+        if phrase_tokens[0] in QUESTION_WORDS:
+            continue
+
+        names.append(phrase)
+
+    return list(dict.fromkeys(names))
+
+
+def _capitalized_entities(query: str) -> list[str]:
+    """Extract useful single-word capitalized names and locations."""
+    entities: list[str] = []
+
+    for raw_term in CAPITALIZED_TERM_PATTERN.findall(query):
+        term = _normalize_token(raw_term)
+
+        if not term:
+            continue
+
+        if term in QUESTION_WORDS:
+            continue
+
+        if term in STOPWORDS:
+            continue
+
+        if len(term) <= 2:
+            continue
+
+        entities.append(term)
+
+    return list(dict.fromkeys(entities))
+
+
+def _lexical_features(
+    query: str,
+    text: str,
+) -> dict[str, Any]:
+    """Calculate simple lexical relevance features."""
+    query_terms = set(_query_terms(query))
+    text_terms = set(_tokens(text))
+    normalized_text = _normalize_phrase(text)
+
+    matched_terms = query_terms.intersection(text_terms)
+
+    # Match concepts when the question and transcript use different wording.
+    for canonical_term, aliases in CONCEPT_ALIASES.items():
+        if canonical_term not in query_terms:
+            continue
+
+        alias_found = any(
             (
-                score,
-                {
-                    "id": ids[i],
-                    "text": text,
-                    "start_timestamp": metadata.get("start_timestamp", ""),
-                    "end_timestamp": metadata.get("end_timestamp", ""),
-                    "index": metadata.get("index"),
-                    "segment_start_index": metadata.get("segment_start_index"),
-                    "segment_end_index": metadata.get("segment_end_index"),
-                    "distance": None,
-                    "lexical_score": score,
-                    "retrieval_method": "lexical",
-                },
+                alias in normalized_text
+                if " " in alias
+                else alias in text_terms
+            )
+            for alias in aliases
+        )
+
+        if alias_found:
+            matched_terms.add(canonical_term)
+
+    query_term_count = len(query_terms)
+    matched_term_count = len(matched_terms)
+
+    coverage = (
+        matched_term_count / query_term_count
+        if query_term_count
+        else 0.0
+    )
+
+    numeric_terms = {
+        term
+        for term in query_terms
+        if term.isdigit()
+    }
+
+    numeric_matches = len(
+        numeric_terms.intersection(text_terms)
+    )
+
+    proper_name_matches = sum(
+        1
+        for name in _proper_names(query)
+        if _normalize_phrase(name) in normalized_text
+    )
+
+    entity_terms = set(_capitalized_entities(query))
+
+    entity_matches = len(
+        entity_terms.intersection(text_terms)
+    )
+
+    lexical_score = (
+        matched_term_count
+        + coverage * 5.0
+        + numeric_matches * 4.0
+        + proper_name_matches * 8.0
+        + entity_matches * 2.0
+    )
+
+    return {
+        "matched_terms": sorted(matched_terms),
+        "matched_term_count": matched_term_count,
+        "query_term_count": query_term_count,
+        "lexical_coverage": coverage,
+        "numeric_matches": numeric_matches,
+        "proper_name_matches": proper_name_matches,
+        "entity_matches": entity_matches,
+        "lexical_score": lexical_score,
+    }
+
+
+def _has_strong_lexical_match(
+    features: dict[str, Any],
+) -> bool:
+    """Return True when lexical evidence is independently meaningful."""
+    matched_count = features["matched_term_count"]
+    coverage = features["lexical_coverage"]
+
+    if features["proper_name_matches"] > 0:
+        return True
+
+    if (
+        features["numeric_matches"] > 0
+        and matched_count >= 2
+    ):
+        return True
+
+    if (
+        features["entity_matches"] > 0
+        and matched_count >= 2
+    ):
+        return True
+
+    if matched_count >= 4:
+        return True
+
+    if matched_count >= 3 and coverage >= 0.45:
+        return True
+
+    return False
+
+
+def _base_chunk(
+    chunk_id: str,
+    text: str,
+    metadata: dict[str, Any],
+) -> dict[str, Any]:
+    """Create the internal representation of a stored transcript chunk."""
+    return {
+        "id": chunk_id,
+        "text": text,
+        "start_timestamp": metadata.get(
+            "start_timestamp",
+            "",
+        ),
+        "end_timestamp": metadata.get(
+            "end_timestamp",
+            "",
+        ),
+        "index": metadata.get("index"),
+        "segment_start_index": metadata.get(
+            "segment_start_index"
+        ),
+        "segment_end_index": metadata.get(
+            "segment_end_index"
+        ),
+        "era": metadata.get("era", "general"),
+    }
+
+
+def _load_all_chunks(
+    collection: chromadb.Collection,
+) -> list[dict[str, Any]]:
+    """Load all stored transcript chunks and metadata."""
+    results = collection.get(
+        include=["documents", "metadatas"]
+    )
+
+    ids = results.get("ids", []) or []
+    documents = results.get("documents", []) or []
+    metadatas = results.get("metadatas", []) or []
+
+    chunks: list[dict[str, Any]] = []
+
+    for position, chunk_id in enumerate(ids):
+        chunks.append(
+            _base_chunk(
+                chunk_id=chunk_id,
+                text=documents[position],
+                metadata=metadatas[position] or {},
             )
         )
 
-    scored.sort(key=lambda item: item[0], reverse=True)
-    return [item[1] for item in scored[:limit]]
+    return chunks
 
 
-def _prioritize_exact_name_matches(query: str, chunks: list[dict]) -> list[dict]:
-    """
-    Prioritize exact proper-name matches for named-entity questions.
+def _detect_query_era(query: str) -> str | None:
+    """Return 'victorian' or 'edwardian' if the query targets a specific era."""
+    lowered = query.lower()
+    has_victorian = "victorian" in lowered
+    has_edwardian = "edwardian" in lowered
 
-    For proper-name queries such as "Thomas Crapper", dense retrieval can return
-    broad but irrelevant chunks. In that case, keep exact-name chunks first and
-    only keep immediate neighboring chunks as supporting context.
-    """
-    proper_names = _proper_name_phrases(query)
+    if has_victorian and not has_edwardian:
+        return "victorian"
 
-    if not proper_names:
-        return chunks
+    if has_edwardian and not has_victorian:
+        return "edwardian"
 
-    exact_name_chunks = [
-        chunk
-        for chunk in chunks
-        if any(name.lower() in chunk["text"].lower() for name in proper_names)
-    ]
+    return None
 
-    if not exact_name_chunks:
-        return chunks
 
-    exact_ids = {chunk["id"] for chunk in exact_name_chunks}
-    exact_indexes = {
-        chunk.get("index")
-        for chunk in exact_name_chunks
-        if isinstance(chunk.get("index"), int)
+def _dense_results(
+    collection: chromadb.Collection,
+    query: str,
+    candidate_limit: int,
+) -> dict[str, dict[str, Any]]:
+    """Retrieve dense semantic candidates using the complete question."""
+    query_embedding = embed_query(query)
+
+    results = collection.query(
+        query_embeddings=[query_embedding],
+        n_results=min(
+            candidate_limit,
+            collection.count(),
+        ),
+        include=[
+            "documents",
+            "metadatas",
+            "distances",
+        ],
+    )
+
+    ids = results.get("ids", [[]])[0]
+    documents = results.get("documents", [[]])[0]
+    metadatas = results.get("metadatas", [[]])[0]
+    distances = results.get("distances", [[]])[0]
+
+    dense: dict[str, dict[str, Any]] = {}
+
+    for rank, chunk_id in enumerate(ids, start=1):
+        chunk = _base_chunk(
+            chunk_id=chunk_id,
+            text=documents[rank - 1],
+            metadata=metadatas[rank - 1] or {},
+        )
+
+        chunk["distance"] = distances[rank - 1]
+        chunk["dense_rank"] = rank
+
+        dense[chunk_id] = chunk
+
+    return dense
+
+
+def _combined_score(
+    distance: float | None,
+    lexical_score: float,
+    proper_name_matches: int,
+    numeric_matches: int,
+) -> float:
+    """Combine dense relevance and lexical relevance."""
+    dense_relevance = (
+        max(0.0, 1.0 - distance)
+        if distance is not None
+        else 0.0
+    )
+
+    normalized_lexical = min(
+        1.0,
+        lexical_score / 12.0,
+    )
+
+    return (
+        dense_relevance * 0.55
+        + normalized_lexical * 0.45
+        + proper_name_matches * 0.10
+        + numeric_matches * 0.05
+    )
+
+
+def _decorate_chunk(
+    query: str,
+    chunk: dict[str, Any],
+    distance: float | None = None,
+    dense_rank: int | None = None,
+    retrieval_method: str = "lexical",
+) -> dict[str, Any]:
+    """Add retrieval and lexical scoring metadata to a chunk."""
+    decorated = dict(chunk)
+
+    features = _lexical_features(
+        query=query,
+        text=chunk["text"],
+    )
+
+    decorated.update(features)
+    decorated["distance"] = distance
+    decorated["dense_rank"] = dense_rank
+    decorated["retrieval_method"] = retrieval_method
+
+    decorated["relevance_score"] = _combined_score(
+        distance=distance,
+        lexical_score=features["lexical_score"],
+        proper_name_matches=features["proper_name_matches"],
+        numeric_matches=features["numeric_matches"],
+    )
+
+    return decorated
+
+
+def _build_candidates(
+    query: str,
+    all_chunks: list[dict[str, Any]],
+    dense_chunks: dict[str, dict[str, Any]],
+    candidate_limit: int,
+) -> list[dict[str, Any]]:
+    """Merge dense candidates with the strongest lexical candidates."""
+    all_by_id = {
+        chunk["id"]: chunk
+        for chunk in all_chunks
     }
 
-    neighboring_chunks: list[dict] = []
+    lexical_candidates: list[dict[str, Any]] = []
 
-    for chunk in chunks:
-        if chunk["id"] in exact_ids:
-            continue
+    for chunk in all_chunks:
+        decorated = _decorate_chunk(
+            query=query,
+            chunk=chunk,
+        )
 
-        chunk_index = chunk.get("index")
+        if _has_strong_lexical_match(decorated):
+            lexical_candidates.append(decorated)
 
-        if isinstance(chunk_index, int) and any(
-            abs(chunk_index - exact_index) <= 1 for exact_index in exact_indexes
-        ):
-            neighboring_chunks.append(chunk)
+    lexical_candidates.sort(
+        key=lambda chunk: (
+            -chunk["lexical_score"],
+            -chunk["lexical_coverage"],
+            -chunk["matched_term_count"],
+        )
+    )
 
-    return exact_name_chunks + neighboring_chunks
+    lexical_candidates = lexical_candidates[
+        :candidate_limit
+    ]
+
+    candidate_ids = set(dense_chunks)
+    candidate_ids.update(
+        chunk["id"]
+        for chunk in lexical_candidates
+    )
+
+    candidates: list[dict[str, Any]] = []
+
+    for chunk_id in candidate_ids:
+        base = all_by_id[chunk_id]
+        dense = dense_chunks.get(chunk_id)
+
+        if dense is not None:
+            lexical_method = _lexical_features(
+                query=query,
+                text=base["text"],
+            )
+
+            method = (
+                "hybrid"
+                if _has_strong_lexical_match(
+                    lexical_method
+                )
+                else "dense"
+            )
+
+            candidate = _decorate_chunk(
+                query=query,
+                chunk=base,
+                distance=dense["distance"],
+                dense_rank=dense["dense_rank"],
+                retrieval_method=method,
+            )
+        else:
+            candidate = _decorate_chunk(
+                query=query,
+                chunk=base,
+                retrieval_method="lexical",
+            )
+
+        candidates.append(candidate)
+
+    candidates.sort(
+        key=lambda chunk: (
+            -chunk["relevance_score"],
+            chunk["distance"]
+            if chunk["distance"] is not None
+            else 999.0,
+            chunk["index"]
+            if isinstance(chunk.get("index"), int)
+            else 999999,
+        )
+    )
+
+    return candidates
 
 
-def _passes_similarity_threshold(chunk: dict) -> bool:
-    """
-    Decide whether a chunk clears the similarity bar.
-
-    A chunk is kept if either signal independently validates it:
-    - it has no distance at all (pure lexical match), or
-    - its lexical score already clears MIN_LEXICAL_SCORE, even if it also
-      has a dense distance from being found by both methods (hybrid), or
-    - its dense distance falls within the configured threshold.
-
-    Without the lexical_score check here, a chunk found by both dense and
-    lexical search (hybrid) could be wrongly rejected on dense distance
-    alone, even though the lexical match alone would have been strong
-    enough to admit it on its own. Being found by both methods is a
-    stronger relevance signal, not a weaker one, and should not be
-    penalized relative to a pure lexical match.
-    """
-    lexical_score = chunk.get("lexical_score") or 0
-
-    if lexical_score >= MIN_LEXICAL_SCORE:
+def _passes_relevance_filter(
+    chunk: dict[str, Any],
+) -> bool:
+    """Return True when a candidate is sufficiently relevant."""
+    if _has_strong_lexical_match(chunk):
         return True
 
     distance = chunk.get("distance")
 
     if distance is None:
+        return False
+
+    if distance <= settings.similarity_threshold:
         return True
 
-    return distance <= settings.similarity_threshold
+    dense_rank = chunk.get("dense_rank")
+
+    if (
+        dense_rank == 1
+        and distance
+        <= settings.similarity_threshold
+        + TOP_DENSE_SOFT_MARGIN
+    ):
+        return True
+
+    return False
 
 
-def retrieve(query: str, top_k: int | None = None) -> list[dict]:
+def _needs_diverse_evidence(query: str) -> bool:
+    """Detect questions that clearly request broad or multi-part evidence."""
+    lowered = query.lower()
+
+    return any(
+        marker in lowered
+        for marker in DIVERSE_EVIDENCE_MARKERS
+    )
+
+
+def _has_explicit_comparison(query: str) -> bool:
+    """Return True for questions that explicitly compare separate topics."""
+    lowered = query.lower()
+
+    return any(
+        marker in lowered
+        for marker in EXPLICIT_COMPARISON_MARKERS
+    )
+
+
+def _strongest_chunk_covers_both(
+    query: str,
+    relevant: list[dict[str, Any]],
+) -> bool:
+    """Check whether the strongest chunk contains both named subjects."""
+    if not relevant:
+        return False
+
+    match = BOTH_SUBJECT_PATTERN.search(query)
+
+    if match is None:
+        return False
+
+    left_terms = _query_terms(match.group(1))
+    right_terms = _query_terms(match.group(2))
+
+    if not left_terms or not right_terms:
+        return False
+
+    left_subject = left_terms[0]
+    right_subject = right_terms[0]
+
+    anchor_terms = set(
+        _tokens(relevant[0]["text"])
+    )
+
+    return (
+        left_subject in anchor_terms
+        and right_subject in anchor_terms
+    )
+
+
+def _chunk_index(chunk: dict[str, Any]) -> int | None:
+    """Return a chunk index when it is valid."""
+    index = chunk.get("index")
+
+    return index if isinstance(index, int) else None
+
+
+def _neighbor_chunks(
+    query: str,
+    anchor: dict[str, Any],
+    all_by_index: dict[int, dict[str, Any]],
+    candidate_by_id: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return the immediate transcript neighbors of an anchor chunk."""
+    anchor_index = _chunk_index(anchor)
+
+    if anchor_index is None:
+        return []
+
+    neighbors: list[dict[str, Any]] = []
+
+    for neighbor_index in (
+        anchor_index - 1,
+        anchor_index + 1,
+    ):
+        base = all_by_index.get(neighbor_index)
+
+        if base is None:
+            continue
+
+        existing = candidate_by_id.get(base["id"])
+
+        if existing is not None:
+            neighbor = dict(existing)
+        else:
+            neighbor = _decorate_chunk(
+                query=query,
+                chunk=base,
+                retrieval_method="neighbor",
+            )
+
+        neighbor["context_neighbor"] = True
+        neighbors.append(neighbor)
+
+    neighbors.sort(
+        key=lambda chunk: (
+            -chunk["relevance_score"],
+            chunk["index"],
+        )
+    )
+
+    return neighbors
+
+
+def _select_local_sources(
+    query: str,
+    relevant: list[dict[str, Any]],
+    all_chunks: list[dict[str, Any]],
+    top_k: int,
+) -> list[dict[str, Any]]:
+    """Select the strongest local evidence and neighboring context."""
+    if not relevant:
+        return []
+
+    result_limit = min(
+        top_k,
+        MAX_RETURNED_SOURCES,
+    )
+
+    anchor = relevant[0]
+    selected = [anchor]
+    selected_ids = {anchor["id"]}
+
+    all_by_index = {
+        chunk["index"]: chunk
+        for chunk in all_chunks
+        if isinstance(chunk.get("index"), int)
+    }
+
+    candidate_by_id = {
+        chunk["id"]: chunk
+        for chunk in relevant
+    }
+
+    for neighbor in _neighbor_chunks(
+        query=query,
+        anchor=anchor,
+        all_by_index=all_by_index,
+        candidate_by_id=candidate_by_id,
+    ):
+        if len(selected) >= result_limit:
+            break
+
+        if neighbor["id"] in selected_ids:
+            continue
+
+        selected.append(neighbor)
+        selected_ids.add(neighbor["id"])
+
+    minimum_score = (
+        anchor["relevance_score"] * 0.65
+    )
+
+    for candidate in relevant[1:]:
+        if len(selected) >= result_limit:
+            break
+
+        if candidate["id"] in selected_ids:
+            continue
+
+        if candidate["relevance_score"] < minimum_score:
+            continue
+
+        selected.append(candidate)
+        selected_ids.add(candidate["id"])
+
+    return selected
+
+
+def _select_diverse_sources(
+    query: str,
+    relevant: list[dict[str, Any]],
+    all_chunks: list[dict[str, Any]],
+    top_k: int,
+) -> list[dict[str, Any]]:
+    """Select relevant chunks that cover distinct parts of a broad question."""
+    if not relevant:
+        return []
+
+    result_limit = min(
+        top_k,
+        MAX_RETURNED_SOURCES,
+    )
+
+    anchor = relevant[0]
+    selected = [anchor]
+    selected_ids = {anchor["id"]}
+    covered_terms = set(anchor["matched_terms"])
+
+    minimum_score = (
+        anchor["relevance_score"] * 0.45
+    )
+
+    for candidate in relevant[1:]:
+        if len(selected) >= result_limit:
+            break
+
+        if candidate["id"] in selected_ids:
+            continue
+
+        if candidate["relevance_score"] < minimum_score:
+            continue
+
+        candidate_terms = set(
+            candidate["matched_terms"]
+        )
+
+        adds_new_terms = bool(
+            candidate_terms - covered_terms
+        )
+
+        candidate_index = _chunk_index(candidate)
+
+        distinct_region = all(
+            candidate_index is None
+            or _chunk_index(existing) is None
+            or abs(
+                candidate_index
+                - _chunk_index(existing)
+            ) > 1
+            for existing in selected
+        )
+
+        if not adds_new_terms and not distinct_region:
+            continue
+
+        selected.append(candidate)
+        selected_ids.add(candidate["id"])
+        covered_terms.update(candidate_terms)
+
+    if len(selected) < 2:
+        all_by_index = {
+            chunk["index"]: chunk
+            for chunk in all_chunks
+            if isinstance(chunk.get("index"), int)
+        }
+
+        candidate_by_id = {
+            chunk["id"]: chunk
+            for chunk in relevant
+        }
+
+        for neighbor in _neighbor_chunks(
+            query=query,
+            anchor=anchor,
+            all_by_index=all_by_index,
+            candidate_by_id=candidate_by_id,
+        ):
+            if len(selected) >= result_limit:
+                break
+
+            if neighbor["id"] in selected_ids:
+                continue
+
+            selected.append(neighbor)
+            selected_ids.add(neighbor["id"])
+
+    for candidate in relevant[1:]:
+        if len(selected) >= result_limit:
+            break
+
+        if candidate["id"] in selected_ids:
+            continue
+
+        if candidate["relevance_score"] < minimum_score:
+            continue
+
+        selected.append(candidate)
+        selected_ids.add(candidate["id"])
+
+    return selected
+
+
+def retrieve(
+    query: str,
+    top_k: int | None = None,
+) -> list[dict]:
     """
-    Retrieve the most relevant chunks for a query.
+    Retrieve ranked transcript evidence for a natural-language question.
 
-    Uses hybrid retrieval:
-    - dense vector search for semantic similarity
-    - lexical fallback for exact names, places, and rare terms
-
-    Chunks whose dense similarity distance falls outside the configured
-    threshold are dropped before the final cut, so the number of returned
-    chunks naturally varies with how well a question is covered by the
-    transcript instead of always returning a fixed count.
-
-    Returns chunks ranked by combined relevance.
+    Factual questions use the strongest result and its immediate transcript
+    neighbors. Broad or explicit synthesis questions may select evidence from
+    distinct transcript regions, but only after each chunk passes relevance
+    filtering.
     """
     query = query.strip()
 
@@ -352,78 +1028,117 @@ def retrieve(query: str, top_k: int | None = None) -> list[dict]:
     if top_k is None:
         top_k = settings.top_k
 
-    collection = get_collection()
-
-    if collection.count() == 0:
+    if top_k <= 0:
         return []
 
-    query_embedding = embed_query(query)
+    collection = get_collection()
 
-    dense_results = collection.query(
-        query_embeddings=[query_embedding],
-        n_results=min(top_k * 2, collection.count()),
-        include=["documents", "metadatas", "distances"],
+    collection_count = collection.count()
+
+    if collection_count == 0:
+        return []
+
+    candidate_limit = min(
+        max(
+            top_k * CANDIDATE_MULTIPLIER,
+            MIN_DENSE_CANDIDATES,
+        ),
+        collection_count,
     )
 
-    dense_chunks: list[dict] = []
+    all_chunks = _load_all_chunks(collection)
 
-    ids = dense_results.get("ids", [[]])[0]
-    documents = dense_results.get("documents", [[]])[0]
-    metadatas = dense_results.get("metadatas", [[]])[0]
-    distances = dense_results.get("distances", [[]])[0]
+    query_era = _detect_query_era(query)
 
-    for i in range(len(ids)):
-        metadata = metadatas[i] or {}
+    if query_era == "victorian":
+        excluded_era = "edwardian"
+    elif query_era == "edwardian":
+        excluded_era = "victorian"
+    else:
+        excluded_era = None
 
-        dense_chunks.append(
-            {
-                "id": ids[i],
-                "text": documents[i],
-                "start_timestamp": metadata.get("start_timestamp", ""),
-                "end_timestamp": metadata.get("end_timestamp", ""),
-                "index": metadata.get("index"),
-                "segment_start_index": metadata.get("segment_start_index"),
-                "segment_end_index": metadata.get("segment_end_index"),
-                "distance": distances[i],
-                "lexical_score": _lexical_score(query, documents[i]),
-                "retrieval_method": "dense",
-            }
-        )
+    logger.info(
+        "Era filter: query_era=%s excluded_era=%s",
+        query_era,
+        excluded_era,
+    )
 
-    lexical_chunks = _lexical_search(
+    if excluded_era:
+        all_chunks = [
+            c for c in all_chunks
+            if c.get("era") != excluded_era
+        ]
+
+    logger.info(
+        "Era sample (first 3 chunks): %s",
+        [(c.get("id"), c.get("era")) for c in all_chunks[:3]],
+    )
+
+    dense_chunks = _dense_results(
         collection=collection,
         query=query,
-        limit=top_k,
+        candidate_limit=candidate_limit,
     )
 
-    merged: dict[str, dict] = {}
+    if excluded_era:
+        dense_chunks = {
+            k: v for k, v in dense_chunks.items()
+            if v.get("era") != excluded_era
+        }
 
-    for chunk in dense_chunks + lexical_chunks:
-        chunk_id = chunk["id"]
-
-        if chunk_id not in merged:
-            merged[chunk_id] = chunk
-            continue
-
-        merged[chunk_id]["lexical_score"] = max(
-            merged[chunk_id].get("lexical_score") or 0,
-            chunk.get("lexical_score") or 0,
-        )
-
-        if merged[chunk_id].get("retrieval_method") == "dense":
-            merged[chunk_id]["retrieval_method"] = "hybrid"
-
-    chunks = list(merged.values())
-
-    chunks.sort(
-        key=lambda chunk: (
-            -(chunk.get("lexical_score") or 0),
-            chunk["distance"] if chunk.get("distance") is not None else 999.0,
-        )
+    candidates = _build_candidates(
+        query=query,
+        all_chunks=all_chunks,
+        dense_chunks=dense_chunks,
+        candidate_limit=candidate_limit,
     )
 
-    chunks = _prioritize_exact_name_matches(query, chunks)
+    relevant = [
+        candidate
+        for candidate in candidates
+        if _passes_relevance_filter(candidate)
+    ]
 
-    chunks = [chunk for chunk in chunks if _passes_similarity_threshold(chunk)]
+    use_diverse = _needs_diverse_evidence(query)
 
-    return chunks[:top_k]
+    if (
+        "both " in query.lower()
+        and not _has_explicit_comparison(query)
+        and _strongest_chunk_covers_both(
+            query=query,
+            relevant=relevant,
+        )
+    ):
+        use_diverse = False
+
+    if use_diverse:
+        selected = _select_diverse_sources(
+            query=query,
+            relevant=relevant,
+            all_chunks=all_chunks,
+            top_k=top_k,
+        )
+        mode = "diverse"
+    else:
+        selected = _select_local_sources(
+            query=query,
+            relevant=relevant,
+            all_chunks=all_chunks,
+            top_k=top_k,
+        )
+        mode = "local"
+
+    logger.info(
+        (
+            "Retrieval completed. mode=%s "
+            "dense_candidates=%s candidates=%s "
+            "relevant_candidates=%s selected_chunks=%s"
+        ),
+        mode,
+        len(dense_chunks),
+        len(candidates),
+        len(relevant),
+        len(selected),
+    )
+
+    return selected

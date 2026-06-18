@@ -8,7 +8,7 @@ from app.config import resolve_llm_profile
 
 logger = logging.getLogger(__name__)
 
-
+#This here is to prevent submitting the text as an API, in case of a misconfiguration
 PLACEHOLDER_KEYS = {
     "",
     "your_api_key_here",
@@ -89,7 +89,7 @@ async def call_llm(messages: list[dict], profile_name: str | None = None) -> LLM
 
     payload: dict[str, Any] = {
         "messages": messages,
-        "temperature": 0.2,
+        "temperature": 0.0,
     }
 
     if provider == "openrouter":

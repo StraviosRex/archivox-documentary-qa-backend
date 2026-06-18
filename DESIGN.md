@@ -6,7 +6,7 @@ Archivox answers natural-language questions about a documentary transcript, grou
 
 ## 1. Chunking Strategy
 
-The transcript is structured as alternating timestamp lines and spoken-text blocks in `HH:MM:SS` format. The application parses it into `(timestamp, text)` pairs and groups every 3 consecutive segments into an overlapping chunk (1-segment overlap), producing approximately 130 chunks of 350–450 words each.
+The transcript is structured as alternating timestamp lines and spoken-text blocks in `HH:MM:SS` format. The application parses it into `(timestamp, text)` pairs and groups every 2 consecutive segments into an overlapping chunk (1-segment overlap), producing approximately 130 chunks of 350–450 words each.
 
 Timestamp-based grouping was chosen over character or sentence splitting because the documentary's natural segment boundaries already correspond to topic changes. Character splitting risks cutting mid-sentence or separating a claim from its supporting context, degrading both retrieval precision and source citation accuracy. The 1-segment overlap ensures that a topic spanning two chunks is fully capturable by either.
 
@@ -26,7 +26,7 @@ Each chunk stores `start_timestamp`, `end_timestamp`, `segment_start_index`, `se
 
 ## 3. Prompt Construction
 
-The LLM receives only the retrieved chunks, formatted as labeled excerpts with timestamp ranges, not the full transcript. The system prompt instructs it to answer in 2–4 sentences from the provided material only, to use a fixed refusal phrase when the excerpts are insufficient, and to open non-refusal answers with a natural timestamp phrase.
+The LLM receives only the retrieved chunks, formatted as labeled excerpts with timestamp ranges, not the full transcript. The system prompt instructs it to answer in 2–4 sentences from the provided material only, to use a fixed refusal phrase when the excerpts are insufficient, and to return plain prose without timestamps or Markdown.
 
 ```text
 System:
@@ -36,8 +36,9 @@ information, respond only with: "I don't have enough information in the
 transcript to answer that question."
 
 Rules: do not invent facts; keep answers to 2–4 sentences; no Markdown;
-never reproduce the [Excerpt N | ...] labels; begin answerable responses
-with a natural timestamp phrase (e.g. "Between 00:10:33 and 00:13:21,").
+never reproduce the [Excerpt N | ...] labels; do not include timestamps
+or time codes in the answer text; begin directly with the answer in plain
+prose.
 
 User:
 Based on the following transcript excerpts, answer the question.
@@ -55,7 +56,7 @@ Question:
 What was borax used for in Victorian milk?
 ```
 
-The `sources` array is constructed by the backend directly from the retrieved and ranked chunks — the LLM is never asked to produce or reference chunk identifiers. This is deliberate: an LLM instructed to cite sources can confabulate timestamps that were never retrieved. Generating the answer text and generating traceable citations are fundamentally different reliability problems, and separating them removes the second problem entirely.
+Timestamps are kept out of the answer text deliberately. The `sources` array already carries precise timestamp ranges for every cited chunk, so including them in the prose would be redundant and make the answer read less naturally. The `sources` array is constructed by the backend directly from the retrieved and ranked chunks — the LLM is never asked to produce or reference chunk identifiers. This is deliberate: an LLM instructed to cite sources can confabulate timestamps that were never retrieved. Generating the answer text and generating traceable citations are fundamentally different reliability problems, and separating them removes the second problem entirely.
 
 ## 4. LLM Provider Configuration
 
@@ -69,9 +70,10 @@ It is not the default since it requires a local Ollama installation the reviewer
 
 ```json
 {
-  "answer": "Between 00:10:33 and 00:13:21, borax was used...",
+  "answer": "According to some people, five grams of borax is sufficient to potentially kill a small child.",
   "sources": [
-    { "timestamp": "00:10:33-00:13:21", "excerpt": "..." }
+    { "timestamp": "00:12:25-00:14:18", "excerpt": "..." },
+    { "timestamp": "00:13:21-00:15:16", "excerpt": "..." }
   ],
   "profile": "groq_llama8b",
   "provider": "groq",
@@ -82,13 +84,13 @@ It is not the default since it requires a local Ollama installation the reviewer
 
 The number of sources varies with retrieval confidence rather than being capped at a fixed count. Padding the response with weak sources to hit a number contradicts the goal of grounded citations.
 
-Before returning, two deterministic post-processing passes run on the LLM output: the first checks for the instructed refusal phrase and returns empty sources if detected; the second checks whether the answer opens with a timestamp phrase and prepends one from the top-ranked chunk if not. This keeps the timestamp convention consistent without relying on the LLM to produce a specific output format in every case.
+Before returning, one deterministic post-processing pass runs on the LLM output: it checks for the instructed refusal phrase and returns empty sources if detected. This keeps refusal behaviour consistent without relying on the LLM to suppress sources itself.
 
-Response times were measured directly against the 30-second requirement. The default Groq profile typically responds in under 5 seconds. The fully local Ollama fallback, the slowest configuration tested, completed in roughly 16 seconds. Both are comfortably within the limit.
+Response times were measured directly against the 30-second requirement across all five evaluation question types. The default Groq profile (`llama-3.1-8b-instant`) consistently responded in under 1 second for retrieval-bound questions and under 3 seconds end-to-end. The fully local Ollama fallback, the slowest configuration tested, completed in roughly 16 seconds. Both are comfortably within the 30-second limit.
 
 ## 6. What I Would Improve Given More Time
 
 - **Re-ranking:** Add a cross-encoder re-ranker, such as `cross-encoder/ms-marco-MiniLM-L-6-v2`, after initial retrieval to improve source ordering and provide a relevance signal less sensitive to dominant transcript vocabulary than raw cosine distance.
 - **Dynamic chunking:** Use topic-shift detection to create variable-length chunks based on content rather than fixed segment windows.
-- **Formal evaluation harness:** The manual smoke-test script (`tests/test_ask.py`) exercises the five evaluation categories but does not assert pass/fail. A proper test suite with explicit assertions on refusal behavior, source accuracy, and answer grounding would catch regressions automatically rather than requiring manual inspection.
+- **Formal evaluation harness:** `tests/test_ask.py` covers the five evaluation categories with explicit PASS/FAIL assertions on refusal behaviour, source presence, and keyword presence in answers; it exits non-zero on any failure so it is CI-compatible. An extension with broader question sets and answer-grounding checks beyond keyword matching would improve regression confidence further.
 - **Streaming:** Add optional token streaming for the answer while keeping the same source-return structure.

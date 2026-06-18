@@ -1,19 +1,17 @@
 """
-Sanity check tests for the /ask endpoint.
+Sanity check tests for the /ask endpoint using the local Ollama profile.
 
-Covers the 5 question types from the evaluation criteria:
-1. Factual question about a specific event
-2. Synthesis question spanning two parts of the transcript
-3. Question about a named person or location
-4. Vague / broadly phrased question
-5. Out-of-scope question (answer not in transcript)
+Covers the same 5 question types as test_ask.py but targets the
+ollama_llama32_3b profile (host.docker.internal:11434). No rate-limit delay
+is needed since Ollama runs locally.
 
 Usage:
-    Start the server first:
-        uvicorn app.main:app --port 8000
+    Start Ollama and the server first:
+        ollama serve
+        HF_HUB_OFFLINE=1 python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 
     Then run:
-        python -m tests.test_ask
+        python -m tests.test_ask_ollama
 """
 
 import httpx
@@ -22,13 +20,15 @@ import sys
 import time
 
 BASE_URL = "http://localhost:8000"
+PROFILE = "ollama_llama32_3b"
 
-# Delay between requests, in seconds. Groq's free tier enforces a tokens-
-# per-minute budget; five questions back to back can exhaust it by the final
-# request, since each sends ~1700 tokens of context plus generates a response.
-# 15 seconds gives enough headroom across all five questions. This delay is a
-# test-script convenience only; the production /ask endpoint does not pace requests.
-DELAY_BETWEEN_REQUESTS_SECONDS = 15
+# Ollama runs locally so there is no token-rate budget to worry about.
+# A small pause is kept to avoid hammering the embedding model between requests.
+DELAY_BETWEEN_REQUESTS_SECONDS = 2
+
+# Ollama on CPU is slower than a cloud API. 16s was observed in testing;
+# 120s gives comfortable headroom on slower machines.
+REQUEST_TIMEOUT_SECONDS = 120.0
 
 QUESTIONS = [
     {
@@ -83,7 +83,7 @@ def _run_checks(
     normalized_answer = (
         data.get("answer", "")
         .lower()
-        .replace("’", "'")
+        .replace("'", "'")
         .replace("`", "'")
     )
     sources = data.get("sources", [])
@@ -108,12 +108,12 @@ async def run_tests():
     timings = []
     results: list[tuple[str, bool]] = []
 
-    async with httpx.AsyncClient(timeout=60.0) as client:
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS) as client:
         # Health check
         try:
             health = await client.get(f"{BASE_URL}/health")
             health.raise_for_status()
-            print("Server is up.\n")
+            print(f"Server is up. Using profile: {PROFILE}\n")
         except Exception as e:
             print(f"Server not reachable at {BASE_URL}: {e}")
             print("Start the server first: uvicorn app.main:app --port 8000")
@@ -122,7 +122,7 @@ async def run_tests():
         # Run each question
         for i, q in enumerate(QUESTIONS):
             if i > 0:
-                print(f"(waiting {DELAY_BETWEEN_REQUESTS_SECONDS}s to avoid provider rate limits...)\n")
+                print(f"(waiting {DELAY_BETWEEN_REQUESTS_SECONDS}s...)\n")
                 await asyncio.sleep(DELAY_BETWEEN_REQUESTS_SECONDS)
 
             print(f"{'='*60}")
@@ -135,7 +135,7 @@ async def run_tests():
             try:
                 response = await client.post(
                     f"{BASE_URL}/ask",
-                    json={"question": q["question"]},
+                    json={"question": q["question"], "profile": PROFILE},
                 )
 
                 response.raise_for_status()
