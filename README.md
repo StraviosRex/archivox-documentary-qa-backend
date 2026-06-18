@@ -76,6 +76,7 @@ All three keys (`GROQ_API_KEY`, `OPENROUTER_API_KEY`, `GEMINI_API_KEY`) are list
 1. `groq_llama8b` (default) / `groq_llama70b` - Groq.
 2. `gemini_flash` - Google.
 3. `openrouter_free_router` - auto-routes to whichever free model OpenRouter has available.
+4. `ollama` - fully local, no API key required. Models are auto-discovered from your running Ollama instance and appear in the UI dropdown.
 
 See [LLM profiles](#llm-profiles) below for the full list and how to obtain each provider's API key.
 
@@ -197,6 +198,8 @@ Ask a question about the transcript.
   "model_used": "llama-3.1-8b-instant"
 }
 ```
+
+Sources are returned in ranked order — most relevant first. Ranking uses cross-encoder relevance as the primary signal, with topic coverage considered for multi-topic questions so that the returned set covers all queried subjects rather than clustering around the highest-scoring one.
 
 For out-of-scope questions, `sources` is empty and the answer says the transcript does not contain enough information.
 

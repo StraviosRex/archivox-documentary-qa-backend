@@ -236,16 +236,17 @@
       <button class="theme-toggle" id="themeToggle" title="Toggle dark mode">🌙</button>
     </div>
     <p class="subtitle">
-      Ask questions about the documentary transcript. Answers are grounded in retrieved transcript excerpts.
+      Let's talk to your transcript with grounded details!
     </p>
 
     <label for="profileSelect">Model profile</label>
     <select id="profileSelect">
       <option value="">Loading profiles...</option>
     </select>
+    <p class="subtitle" style="margin-top:6px;font-size:0.8em;">If Ollama is running locally, your installed models will appear here automatically.</p>
 
     <label for="questionInput">Question</label>
-    <textarea id="questionInput" placeholder="Ask a question about the transcript..."></textarea>
+    <textarea id="questionInput" placeholder="Let's talk to your transcript with grounded details!"></textarea>
 
     <button class="ask-btn" id="askButton">Ask</button>
 
@@ -257,7 +258,7 @@
     </div>
 
     <div id="sourcesBox" class="sources-box hidden">
-      <h2>Sources</h2>
+      <h2>Sources — ranked by relevance</h2>
       <div id="sources"></div>
     </div>
 
@@ -395,13 +396,14 @@
         return;
       }
 
-      for (const source of sources) {
+      for (let i = 0; i < sources.length; i++) {
+        const source = sources[i];
         const sourceDiv = document.createElement("div");
         sourceDiv.className = "source";
 
         const timestampDiv = document.createElement("div");
         timestampDiv.className = "timestamp";
-        timestampDiv.textContent = source.timestamp;
+        timestampDiv.innerHTML = `${i + 1}.&nbsp;&nbsp;${source.timestamp}`;
 
         const excerptDiv = document.createElement("div");
         excerptDiv.className = "excerpt";

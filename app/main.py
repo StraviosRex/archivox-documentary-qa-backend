@@ -426,9 +426,7 @@ def build_sources(
     """Build ranked source references from retrieved evidence chunks."""
     sources: list[Source] = []
 
-    for chunk in chunks[
-        : settings.sources_in_response
-    ]:
+    for chunk in chunks[: settings.sources_in_response]:
         timestamp = (
             f'{chunk["start_timestamp"]}-'
             f'{chunk["end_timestamp"]}'

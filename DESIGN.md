@@ -26,6 +26,8 @@ Each chunk stores `start_timestamp`, `end_timestamp`, `segment_start_index`, `se
 
 **Named-entity prioritization.** After filtering, chunks containing an exact proper-name phrase match are promoted to the front of the context window. Only their immediate neighbors (±1 index position) are kept as supporting context; remaining candidates are discarded. This prevents topically adjacent but less specific chunks from burying the directly relevant one.
 
+**Source ranking.** Returned sources are ordered by relevance to the question, with cross-encoder score as the primary signal. For multi-topic questions the ranking reflects best evidence coverage rather than raw scores; a lower-scoring chunk covering a missing topic is preferred over a higher-scoring one that duplicates already-covered ground. Numerical scores are kept internal; the UI presents sources as an ordered list under the heading "ranked by relevance".
+
 ## 3. Prompt Construction
 
 The LLM receives only the retrieved chunks, formatted as labeled excerpts with timestamp ranges, not the full transcript. The system prompt instructs it to answer in 2–4 sentences from the provided material only, to use a fixed refusal phrase when the excerpts are insufficient, and to return plain prose without timestamps or Markdown.
@@ -66,7 +68,7 @@ LLM backends are configured as named profiles in `config/models.yaml`, each spec
 
 `groq_llama8b` is the default; it was the most extensively exercised profile during retrieval and threshold tuning. Ollama was tested with llama3.2:3b across all five evaluation categories and produced correct, well-grounded answers in every case, including accurate refusal on the out-of-scope question. 
 
-It is not the default since it requires a local Ollama installation the reviewer may not have, but it is a genuinely viable fully-offline option, not just an architectural placeholder. When running inside Docker, `OLLAMA_BASE_URL` must be set to `http://host.docker.internal:11434/v1` (the `.env.example` has this by the default) — `localhost` from inside the container resolves to the container itself, not the host where Ollama is running. If the repo is cloned to the machine directly, OLLAMA_BASE_URL should be set to "http://localhost:11434/v1".
+It is not the default since it requires a local Ollama installation the reviewer may not have, but it is a genuinely viable fully-offline option, not just an architectural placeholder. When running inside Docker, `OLLAMA_BASE_URL` must be set to `http://host.docker.internal:11434/v1` (the `.env.example` has this as the default); `localhost` from inside the container resolves to the container itself, not the host where Ollama is running. If the repo is cloned to the machine directly, OLLAMA_BASE_URL should be set to "http://localhost:11434/v1".
 
 ## 5. API Response Construction
 
@@ -88,7 +90,7 @@ The number of sources varies with retrieval confidence rather than being capped 
 
 Before returning, one deterministic post-processing pass runs on the LLM output: it checks for the instructed refusal phrase and returns empty sources if detected. This keeps refusal behaviour consistent without relying on the LLM to suppress sources itself.
 
-Response times were measured directly against the 30-second requirement across all six evaluation question types (including the hard multi-topic case). With cross-encoder re-ranking enabled, the default Groq profile (`llama-3.1-8b-instant`) averaged 3.51s end-to-end across six questions, with a slowest single response of 4.23s. The fully local Ollama fallback (`llama3.2:3b`) completed in approximately 9 seconds — retrieval accounts for ~3s, with local CPU inference adding ~6s for generation. All configurations are comfortably within the 30-second limit.
+Response times were measured directly against the 30-second requirement across all six evaluation question types (including the hard multi-topic case). With cross-encoder re-ranking enabled, the default Groq profile (`llama-3.1-8b-instant`) averaged 3.51s end-to-end across six questions, with a slowest single response of 4.23s. The fully local Ollama fallback (`llama3.2:3b`) completed in approximately 9 seconds; retrieval accounts for ~3s, with local CPU inference adding ~6s for generation. All configurations are comfortably within the 30-second limit.
 
 ## 6. What I Would Improve Given More Time
 
