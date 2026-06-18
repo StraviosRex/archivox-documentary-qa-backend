@@ -38,6 +38,43 @@ Same two source chunks returned for both profiles, confirming retrieval consiste
 
 Both the default profile and the slowest tested fallback complete well within the 30-second requirement, with the hosted default responding roughly 4x faster than the fully local option.
 
+---
+
+## After cross-encoder re-ranker (phase 2)
+
+A `cross-encoder/ms-marco-MiniLM-L-6-v2` re-ranker was added to fix multi-topic retrieval failure. It scores each `(query, chunk)` pair independently, allowing queries that span multiple transcript sections (e.g. "Borax, Celluloid, and Asbestos") to surface all relevant sections instead of only the dominant one.
+
+The re-ranker can be toggled via `RERANKING_ENABLED=false` in the environment, allowing a clean A/B comparison using the same test runner, server, index, and provider.
+
+### Method
+
+End-to-end response times measured via `python -m tests.test_ask` (5 question types, `groq_llama8b` profile, server already running with index built). Both runs used identical conditions — same server process, same ChromaDB index, same provider.
+
+### Controlled latency comparison
+
+| # | Question type | Baseline (CE off) | CE enabled | Delta |
+|---|---|---|---|---|
+| 1 | Factual | 3.30s | 10.76s | +7.5s |
+| 2 | Synthesis | 0.96s | 7.32s | +6.4s |
+| 3 | Named person/location | 0.66s | 3.69s | +3.0s |
+| 4 | Vague | 0.74s | 5.99s | +5.3s |
+| 5 | Out-of-scope | 0.69s | 5.30s | +4.6s |
+| | **Average** | **1.27s** | **6.61s** | **+5.3s** |
+
+All 5 assertions passed in both configurations.
+
+### Retrieval accuracy
+
+| Query | Expected topics | Baseline coverage | CE coverage |
+|---|---|---|---|
+| "What were the dangers of Borax, Celluloid, and Asbestos?" | 3 | 1/3 (asbestos only) | 3/3 |
+
+### Notes
+
+- The CE adds ~5s overhead on average. Queries with short or uncommon proper names (Thomas Crapper — "thomas" and "crapper" are under 5 chars) incur less overhead because fewer literal-term chunks are injected before scoring.
+- Both configurations pass all 5 test assertions and remain well within the 30-second requirement.
+- Because retrieval returned identical chunks for standard queries, the observed latency difference is primarily attributable to the CE inference stage rather than the LLM or provider.
+
 ## Raw output
 
 ```

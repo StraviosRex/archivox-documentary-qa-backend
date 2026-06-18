@@ -7,6 +7,8 @@ from typing import Any
 
 import chromadb
 
+from sentence_transformers.cross_encoder import CrossEncoder
+
 from app.chunker import load_and_chunk
 from app.config import settings
 from app.embedder import embed_query, embed_texts
@@ -21,6 +23,20 @@ CANDIDATE_MULTIPLIER = 4
 MIN_DENSE_CANDIDATES = 12
 MAX_RETURNED_SOURCES = 3
 TOP_DENSE_SOFT_MARGIN = 0.05
+
+_CE_LOCAL = Path(__file__).parent.parent / "models" / "cross-encoder" / "ms-marco-MiniLM-L-6-v2"
+CROSS_ENCODER_MODEL = str(_CE_LOCAL) if _CE_LOCAL.exists() else "cross-encoder/ms-marco-MiniLM-L-6-v2"
+CROSS_ENCODER_THRESHOLD = -3.0
+RERANKING_ENABLED = settings.reranking_enabled
+
+_cross_encoder: CrossEncoder | None = None
+
+
+def _get_cross_encoder() -> CrossEncoder:
+    global _cross_encoder
+    if _cross_encoder is None:
+        _cross_encoder = CrossEncoder(CROSS_ENCODER_MODEL)
+    return _cross_encoder
 
 TOKEN_PATTERN = re.compile(
     r"[A-Za-z]+(?:'[A-Za-z]+)?|\d[\d,]*"
@@ -71,6 +87,11 @@ DIVERSE_EVIDENCE_MARKERS = (
     "different ways", "various ways", "overall", "in general", "throughout",
     "everyday life", "multiple factors", "differ ", "different from", "difference",
     "versus", "vs ",
+)
+
+MULTI_ITEM_LIST_PATTERN = re.compile(
+    r"\b\w+,\s+\w+.*\band\b",
+    re.IGNORECASE,
 )
 
 BOTH_SUBJECT_PATTERN = re.compile(
@@ -335,6 +356,15 @@ def _capitalized_entities(query: str) -> list[str]:
     return list(dict.fromkeys(entities))
 
 
+def _extract_literal_query_terms(query: str) -> set[str]:
+    """Return lowercase content words (len >= 5, non-stopword) for literal chunk matching."""
+    tokens = TOKEN_PATTERN.findall(query.lower())
+    return {
+        t for t in tokens
+        if len(t) >= 5 and t not in STOPWORDS and t not in QUESTION_WORDS
+    }
+
+
 def _lexical_features(
     query: str,
     text: str,
@@ -418,6 +448,8 @@ def _has_strong_lexical_match(
     features: dict[str, Any],
 ) -> bool:
     """Return True when lexical evidence is independently meaningful."""
+    if "matched_term_count" not in features:
+        return False
     matched_count = features["matched_term_count"]
     coverage = features["lexical_coverage"]
 
@@ -613,6 +645,27 @@ def _decorate_chunk(
     return decorated
 
 
+def _apply_cross_encoder(
+    query: str,
+    candidates: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Score each candidate against the query using a cross-encoder and re-rank."""
+    if not candidates:
+        return candidates
+
+    cross_encoder = _get_cross_encoder()
+
+    pairs = [[query, chunk["text"]] for chunk in candidates]
+    scores = cross_encoder.predict(pairs, show_progress_bar=False).tolist()
+
+    for chunk, score in zip(candidates, scores):
+        chunk["cross_encoder_score"] = score
+
+    candidates.sort(key=lambda c: c["cross_encoder_score"], reverse=True)
+
+    return candidates
+
+
 def _build_candidates(
     query: str,
     all_chunks: list[dict[str, Any]],
@@ -709,6 +762,13 @@ def _passes_relevance_filter(
     chunk: dict[str, Any],
 ) -> bool:
     """Return True when a candidate is sufficiently relevant."""
+    if chunk.get("force_include"):
+        return True
+
+    ce_score = chunk.get("cross_encoder_score")
+    if ce_score is not None and ce_score >= CROSS_ENCODER_THRESHOLD:
+        return True
+
     if _has_strong_lexical_match(chunk):
         return True
 
@@ -737,10 +797,13 @@ def _needs_diverse_evidence(query: str) -> bool:
     """Detect questions that clearly request broad or multi-part evidence."""
     lowered = query.lower()
 
-    return any(
-        marker in lowered
-        for marker in DIVERSE_EVIDENCE_MARKERS
-    )
+    if any(marker in lowered for marker in DIVERSE_EVIDENCE_MARKERS):
+        return True
+
+    if MULTI_ITEM_LIST_PATTERN.search(query):
+        return True
+
+    return False
 
 
 def _has_explicit_comparison(query: str) -> bool:
@@ -928,14 +991,31 @@ def _select_diverse_sources(
         anchor["relevance_score"] * 0.45
     )
 
-    for candidate in relevant[1:]:
+    literal_query_terms = _extract_literal_query_terms(query)
+
+    # Prioritise candidates that introduce new query term coverage before
+    # same-topic geographically-distinct duplicates (e.g. two asbestos chunks
+    # crowd out celluloid when all three topics are asked about).
+    anchor_terms = set(anchor["matched_terms"])
+    remaining = sorted(
+        relevant[1:],
+        key=lambda c: (
+            not bool(set(c.get("matched_terms", [])) - anchor_terms),
+            -c.get("cross_encoder_score", -999.0),
+        ),
+    )
+
+    for candidate in remaining:
         if len(selected) >= result_limit:
             break
 
         if candidate["id"] in selected_ids:
             continue
 
-        if candidate["relevance_score"] < minimum_score:
+        if (
+            not candidate.get("force_include")
+            and candidate["relevance_score"] < minimum_score
+        ):
             continue
 
         candidate_terms = set(
@@ -958,7 +1038,8 @@ def _select_diverse_sources(
             for existing in selected
         )
 
-        if not adds_new_terms and not distinct_region:
+        uncovered_literal = literal_query_terms - covered_terms
+        if not adds_new_terms and (not distinct_region or uncovered_literal):
             continue
 
         selected.append(candidate)
@@ -1093,6 +1174,24 @@ def retrieve(
         candidate_limit=candidate_limit,
     )
 
+    if RERANKING_ENABLED:
+        # Inject literal query-term matches before CE scoring so we only score
+        # the combined set (~30-40 chunks) instead of the entire corpus.
+        candidate_ids = {c["id"] for c in candidates}
+        literal_terms = _extract_literal_query_terms(query)
+        for chunk in all_chunks:
+            if chunk["id"] not in candidate_ids and any(
+                term in chunk["text"].lower() for term in literal_terms
+            ):
+                decorated = _decorate_chunk(query=query, chunk=chunk)
+                decorated["force_include"] = True
+                candidates.append(decorated)
+                candidate_ids.add(chunk["id"])
+
+        _apply_cross_encoder(query=query, candidates=candidates)
+
+        candidates.sort(key=lambda c: c.get("cross_encoder_score", -999.0), reverse=True)
+
     relevant = [
         candidate
         for candidate in candidates
@@ -1132,13 +1231,15 @@ def retrieve(
         (
             "Retrieval completed. mode=%s "
             "dense_candidates=%s candidates=%s "
-            "relevant_candidates=%s selected_chunks=%s"
+            "relevant_candidates=%s selected_chunks=%s "
+            "ce_top_score=%s"
         ),
         mode,
         len(dense_chunks),
         len(candidates),
         len(relevant),
         len(selected),
+        round(candidates[0]["cross_encoder_score"], 3) if candidates and "cross_encoder_score" in candidates[0] else None,
     )
 
     return selected

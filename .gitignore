@@ -13,6 +13,9 @@ archivox/
 # --- ChromaDB persistence ---
 chroma_db/
 
+# --- Downloaded model weights ---
+models/
+
 # --- IDE / editor ---
 .vscode/
 .idea/
@@ -34,6 +37,7 @@ AGENT_BRIEF.md
 .claude/settings.local.json
 tasks.md
 prompt.py.bak
+todo.md
 # --- One-off diagnostic scripts ---
 debug_lexical.py
 *.bak

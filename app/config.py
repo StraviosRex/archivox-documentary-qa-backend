@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     top_k: int = Field(default=5)
     sources_in_response: int = Field(default=3)
     similarity_threshold: float = Field(default=0.48)
+    reranking_enabled: bool = Field(default=True)
 
     # Embedding/chunking
     embedding_model: str = Field(default="all-MiniLM-L6-v2")
