@@ -23,19 +23,37 @@ The index is automatically rebuilt if the transcript file, embedding model, or c
 
 ## Quickstart
 
-### 1. Install dependencies
+### Local setup
 
 ```bash
 pip install -r requirements.txt
-```
-
-The embedding model (`all-MiniLM-L6-v2`) is downloaded automatically on first run and then cached locally. The Dockerfile pre-downloads it at build time.
-
-### 2. Configure environment
-
-```bash
 cp .env.example .env
 ```
+
+The embedding model (`all-MiniLM-L6-v2`) is downloaded automatically on first run and cached locally. Open `.env` and set your API key (see [Configure your LLM provider](#configure-your-llm-provider) below), place your transcript at `data/transcript.txt`, then:
+
+```bash
+uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
+Open `http://localhost:8000` for the web UI, or `http://localhost:8000/docs` for the interactive API docs.
+
+### Docker setup
+
+No `pip install` on your host — the Dockerfile installs all dependencies inside the container at build time.
+
+```bash
+cp .env.example .env   # then add your API key
+docker compose up --build
+```
+
+The first build downloads CPU-only PyTorch and both ML models (`all-MiniLM-L6-v2` and `cross-encoder/ms-marco-MiniLM-L-6-v2`) into the image layers — this takes a few minutes but is cached for all subsequent builds. On first startup the transcript is indexed into a named volume (`chroma_data`), which persists across container restarts so subsequent starts are fast.
+
+**Using Ollama with Docker:** from inside the container, `localhost` points to the container itself, not your machine. Make sure `.env` has `OLLAMA_BASE_URL=http://host.docker.internal:11434/v1` — this is already the default in `.env.example`. With `ollama serve` running on the host, the container will reach it correctly and the UI will auto-discover your models.
+
+Open `http://localhost:8000` for the web UI, or `http://localhost:8000/docs` for the interactive API docs.
+
+### Configure your LLM provider
 
 Open `.env` and set the API key for the provider you want to use. Groq is the default:
 
@@ -82,8 +100,7 @@ All three keys (`GROQ_API_KEY`, `OPENROUTER_API_KEY`, `GEMINI_API_KEY`) are list
 
 See [LLM profiles](#llm-profiles) below for the full list and how to obtain each provider's API key.
 
-
-### 3. Add your transcript
+### Transcript format
 
 Place your transcript at `data/transcript.txt`. The expected format is alternating timestamp and text lines:
 
@@ -93,25 +110,6 @@ Spoken text for the first segment goes here.
 00:01:23
 The next segment of spoken text continues here.
 ```
-
-### 4. Run the server
-
-```bash
-uvicorn app.main:app --host 0.0.0.0 --port 8000
-```
-
-The transcript is indexed on startup. Open `http://localhost:8000` for the web UI, or `http://localhost:8000/docs` for the interactive API docs.
-
-## Docker
-
-```bash
-cp .env.example .env   # then add your API key
-docker compose up --build
-```
-
-The first build downloads CPU-only PyTorch and both ML models (`all-MiniLM-L6-v2` and `cross-encoder/ms-marco-MiniLM-L-6-v2`) into the image layers - this takes a few minutes but is cached for all subsequent builds. On first startup the transcript is indexed into a named volume (`chroma_data`), which persists across container restarts so subsequent starts are fast.
-
-**Using Ollama with Docker:** from inside the container, `localhost` points to the container itself, not your machine. Make sure `.env` has `OLLAMA_BASE_URL=http://host.docker.internal:11434/v1` — this is already the default in `.env.example`. With `ollama serve` running on the host, the container will reach it correctly and the UI will auto-discover your models.
 
 ## Performance
 
