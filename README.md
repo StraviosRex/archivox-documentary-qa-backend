@@ -245,7 +245,7 @@ All settings can be set in `.env`. See [.env.example](.env.example) for the full
 | `SIMILARITY_THRESHOLD` | `0.48` | Max cosine distance for a chunk to be included |
 | `RERANKING_ENABLED` | `true` | Enable cross-encoder re-ranking (`cross-encoder/ms-marco-MiniLM-L-6-v2`) |
 | `EMBEDDING_MODEL` | `all-MiniLM-L6-v2` | Sentence-transformer model name |
-| `CHUNK_WINDOW_SIZE` | `3` | Transcript segments per chunk |
+| `CHUNK_WINDOW_SIZE` | `2` | Transcript segments per chunk |
 | `CHUNK_OVERLAP` | `1` | Overlapping segments between consecutive chunks |
 | `TRANSCRIPT_PATH` | `data/transcript.txt` | Path to transcript file |
 | `CHROMA_PERSIST_DIR` | `chroma_db` | Directory for ChromaDB persistence |
