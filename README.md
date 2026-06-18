@@ -60,9 +60,9 @@ All three keys (`GROQ_API_KEY`, `OPENROUTER_API_KEY`, `GEMINI_API_KEY`) are list
 
 **Getting API keys (all free tier):**
 
-- **Groq** — create an account at [console.groq.com](https://console.groq.com), then go to *API Keys* and generate a key. Free tier includes `llama-3.1-8b-instant` (6,000 TPM) and `llama-3.3-70b-versatile` (12,000 TPM) with independent rate limits.
-- **Google Gemini** — sign in at [aistudio.google.com](https://aistudio.google.com), click *Get API key*, and create a key in a new or existing project. Free tier covers Gemini 2.5 Flash with generous daily limits.
-- **OpenRouter** — create an account at [openrouter.ai](https://openrouter.ai), go to *Keys*, and generate a key. Free-tier models (including `openrouter/free`) are available without adding credits.
+- **Groq** - create an account at [console.groq.com](https://console.groq.com), then go to *API Keys* and generate a key. Free tier includes `llama-3.1-8b-instant` (6,000 TPM) and `llama-3.3-70b-versatile` (12,000 TPM) with independent rate limits.
+- **Google Gemini** - sign in at [aistudio.google.com](https://aistudio.google.com), click *Get API key*, and create a key in a new or existing project. Free tier covers Gemini 2.5 Flash with generous daily limits.
+- **OpenRouter** - create an account at [openrouter.ai](https://openrouter.ai), go to *Keys*, and generate a key. Free-tier models (including `openrouter/free`) are available without adding credits.
 
 **Fully local (no API key):** Install [Ollama](https://ollama.com), run `ollama pull llama3.2:3b`, start `ollama serve`, and set `LLM_PROFILE=ollama_llama32_3b`. No internet connection required after the model is downloaded.
 
@@ -73,9 +73,9 @@ All three keys (`GROQ_API_KEY`, `OPENROUTER_API_KEY`, `GEMINI_API_KEY`) are list
 
 **Available profiles:**
 
-1. `groq_llama8b` (default) / `groq_llama70b` — Groq.
-2. `gemini_flash` — Google.
-3. `openrouter_free_router` — auto-routes to whichever free model OpenRouter has available.
+1. `groq_llama8b` (default) / `groq_llama70b` - Groq.
+2. `gemini_flash` - Google.
+3. `openrouter_free_router` - auto-routes to whichever free model OpenRouter has available.
 
 See [LLM profiles](#llm-profiles) below for the full list and how to obtain each provider's API key.
 
@@ -106,11 +106,11 @@ cp .env.example .env   # then add your API key
 docker compose up --build
 ```
 
-The first build downloads CPU-only PyTorch and both ML models (`all-MiniLM-L6-v2` and `cross-encoder/ms-marco-MiniLM-L-6-v2`) into the image layers — this takes a few minutes but is cached for all subsequent builds. On first startup the transcript is indexed into a named volume (`chroma_data`), which persists across container restarts so subsequent starts are fast.
+The first build downloads CPU-only PyTorch and both ML models (`all-MiniLM-L6-v2` and `cross-encoder/ms-marco-MiniLM-L-6-v2`) into the image layers - this takes a few minutes but is cached for all subsequent builds. On first startup the transcript is indexed into a named volume (`chroma_data`), which persists across container restarts so subsequent starts are fast.
 
 ## Performance
 
-All times are end-to-end HTTP round trips (retrieval + LLM generation) measured against a running server with cross-encoder re-ranking enabled. Clean-start run — index rebuilt from scratch before measurement.
+All times are end-to-end HTTP round trips (retrieval + LLM generation) measured against a running server with cross-encoder re-ranking enabled. Clean-start run - index rebuilt from scratch before measurement.
 
 ### Response times by question type
 
@@ -147,11 +147,11 @@ See [benchmarks.md](benchmarks.md) for full phase-by-phase results, CE on/off co
 
 ![Factual answer with sources](assets/frontend01.png)
 
-**Out-of-scope refusal — no sources returned**
+**Out-of-scope refusal - no sources returned**
 
 ![Out-of-scope refusal](assets/frontend02.png)
 
-**Multi-topic query — all three topics retrieved**
+**Multi-topic query - all three topics retrieved**
 
 ![Multi-topic answer covering Borax, Celluloid, and Asbestos](assets/frontend03.png)
 
@@ -231,9 +231,9 @@ All settings can be set in `.env`. See [.env.example](.env.example) for the full
 | Variable | Default | Description |
 |---|---|---|
 | `LLM_PROFILE` | `groq_llama8b` | Active LLM profile from `models.yaml` |
-| `GROQ_API_KEY` | — | Groq API key |
-| `OPENROUTER_API_KEY` | — | OpenRouter API key |
-| `GEMINI_API_KEY` | — | Gemini API key |
+| `GROQ_API_KEY` | - | Groq API key |
+| `OPENROUTER_API_KEY` | - | OpenRouter API key |
+| `GEMINI_API_KEY` | - | Gemini API key |
 | `OLLAMA_BASE_URL` | `http://localhost:11434/v1` | Ollama endpoint |
 | `TOP_K` | `5` | Chunks retrieved per query |
 | `SOURCES_IN_RESPONSE` | `3` | Sources returned in the response |
@@ -250,10 +250,10 @@ All settings can be set in `.env`. See [.env.example](.env.example) for the full
 `tests/test_ask.py` is an end-to-end regression suite covering the 6 question types from the evaluation criteria: factual, synthesis, named-entity, vague, out-of-scope, and a hard multi-topic query (Borax / Celluloid / Asbestos). Each question has programmatic assertions; the script exits with code 1 if any assertion fails and prints a pass/fail summary.
 
 ```bash
-# Terminal 1 — start the server
+# Terminal 1 - start the server
 uvicorn app.main:app --port 8000
 
-# Terminal 2 — run the test suite
+# Terminal 2 - run the test suite
 python -m tests.test_ask
 ```
 
