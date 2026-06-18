@@ -8,6 +8,8 @@ At startup, Archivox parses a plain-text transcript, splits it into overlapping 
 
 The index is automatically rebuilt if the transcript file, embedding model, or chunking settings change. Otherwise the persisted index is reused, so subsequent starts are fast.
 
+![Retrieval pipeline](assets/archivox_real_pipeline.svg)
+
 ## Stack
 
 | Layer | Technology |
