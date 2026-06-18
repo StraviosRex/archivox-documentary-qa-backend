@@ -135,9 +135,9 @@ All times are end-to-end HTTP round trips (retrieval + LLM generation) measured 
 | Provider | Model | Avg time | Notes |
 |---|---|---|---|
 | Groq (default) | `llama-3.1-8b-instant` | 3.47s | Hosted free tier |
-| Ollama (local) | `llama3.2:3b` | ~16s | Fully offline, no API key |
+| Ollama (local) | `llama3.2:3b` | ~9s | Fully offline, no API key |
 
-Both are well within the 30-second requirement. The Ollama time reflects local CPU inference; the Groq time reflects retrieval + hosted generation.
+Both are well within the 30-second requirement. Retrieval takes ~3s in both cases; the difference is generation speed — Groq's hosted inference is significantly faster than local CPU inference.
 
 See [benchmarks.md](benchmarks.md) for full phase-by-phase results, CE on/off comparisons, and threshold calibration findings.
 

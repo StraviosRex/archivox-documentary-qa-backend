@@ -88,7 +88,7 @@ The number of sources varies with retrieval confidence rather than being capped 
 
 Before returning, one deterministic post-processing pass runs on the LLM output: it checks for the instructed refusal phrase and returns empty sources if detected. This keeps refusal behaviour consistent without relying on the LLM to suppress sources itself.
 
-Response times were measured directly against the 30-second requirement across all six evaluation question types (including the hard multi-topic case). With cross-encoder re-ranking enabled, the default Groq profile (`llama-3.1-8b-instant`) averaged 3.51s end-to-end across six questions, with a slowest single response of 4.23s. The fully local Ollama fallback, the slowest configuration tested, completed in roughly 16 seconds. All configurations are comfortably within the 30-second limit.
+Response times were measured directly against the 30-second requirement across all six evaluation question types (including the hard multi-topic case). With cross-encoder re-ranking enabled, the default Groq profile (`llama-3.1-8b-instant`) averaged 3.51s end-to-end across six questions, with a slowest single response of 4.23s. The fully local Ollama fallback (`llama3.2:3b`) completed in approximately 9 seconds — retrieval accounts for ~3s, with local CPU inference adding ~6s for generation. All configurations are comfortably within the 30-second limit.
 
 ## 6. What I Would Improve Given More Time
 
