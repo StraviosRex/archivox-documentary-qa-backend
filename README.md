@@ -106,6 +106,39 @@ docker compose up --build
 
 The Chroma index is stored in a named volume (`chroma_data`) so it persists across container restarts.
 
+## Performance
+
+All times are end-to-end HTTP round trips (retrieval + LLM generation) measured against a running server with cross-encoder re-ranking enabled. Clean-start run — index rebuilt from scratch before measurement.
+
+### Response times by question type
+
+| # | Question type | Time | Result |
+|---|---|---|---|
+| 1 | Factual | 3.40s | PASS |
+| 2 | Synthesis | 4.23s | PASS |
+| 3 | Named person / location | 2.88s | PASS |
+| 4 | Vague | 3.61s | PASS |
+| 5 | Out-of-scope | 3.18s | PASS |
+| 6 | Multi-topic (Borax / Celluloid / Asbestos) | 3.50s | PASS |
+| | **Average** | **3.47s** | **6/6** |
+
+### Multi-topic retrieval coverage
+
+| Query | Topics retrieved |
+|---|---|
+| "What were the dangers of Borax, Celluloid, and Asbestos?" | 3/3 |
+
+### Provider comparison
+
+| Provider | Model | Avg time | Notes |
+|---|---|---|---|
+| Groq (default) | `llama-3.1-8b-instant` | 3.47s | Hosted free tier |
+| Ollama (local) | `llama3.2:3b` | ~16s | Fully offline, no API key |
+
+Both are well within the 30-second requirement. The Ollama time reflects local CPU inference; the Groq time reflects retrieval + hosted generation.
+
+See [benchmarks.md](benchmarks.md) for full phase-by-phase results, CE on/off comparisons, and threshold calibration findings.
+
 ## Screenshots
 
 **Answering a question with grounded sources**
@@ -184,6 +217,8 @@ OpenRouter profiles with fallback models automatically retry on other free model
 
 To add a new profile, add an entry to `config/models.yaml`, no code changes needed.
 
+Retrieval is model-agnostic: the same source chunks are returned regardless of which profile is active, since retrieval runs entirely before the LLM is called. Switching to a larger model (e.g. `groq_llama70b`) does not change what evidence is retrieved, but produces more detailed and precisely grounded answers from the same excerpts.
+
 ## Configuration reference
 
 All settings can be set in `.env`. See [.env.example](.env.example) for the full list.
@@ -198,20 +233,23 @@ All settings can be set in `.env`. See [.env.example](.env.example) for the full
 | `TOP_K` | `5` | Chunks retrieved per query |
 | `SOURCES_IN_RESPONSE` | `3` | Sources returned in the response |
 | `SIMILARITY_THRESHOLD` | `0.48` | Max cosine distance for a chunk to be included |
+| `RERANKING_ENABLED` | `true` | Enable cross-encoder re-ranking (`cross-encoder/ms-marco-MiniLM-L-6-v2`) |
 | `EMBEDDING_MODEL` | `all-MiniLM-L6-v2` | Sentence-transformer model name |
 | `CHUNK_WINDOW_SIZE` | `3` | Transcript segments per chunk |
 | `CHUNK_OVERLAP` | `1` | Overlapping segments between consecutive chunks |
 | `TRANSCRIPT_PATH` | `data/transcript.txt` | Path to transcript file |
 | `CHROMA_PERSIST_DIR` | `chroma_db` | Directory for ChromaDB persistence |
 
-## Running the demo script
+## Running the test suite
 
-`tests/test_ask.py` is a manual smoke-test script, not an automated assertion-based suite. It sends the 5 question types from the evaluation criteria (factual, synthesis, named-entity, vague, out-of-scope) to a running server and prints each answer and its sources so the output can be inspected by eye. It does not pass or fail on its own; it is meant as a quick way to exercise all five categories at once during development or review.
+`tests/test_ask.py` is an end-to-end regression suite covering the 6 question types from the evaluation criteria: factual, synthesis, named-entity, vague, out-of-scope, and a hard multi-topic query (Borax / Celluloid / Asbestos). Each question has programmatic assertions; the script exits with code 1 if any assertion fails and prints a pass/fail summary.
 
 ```bash
 # Terminal 1 — start the server
 uvicorn app.main:app --port 8000
 
-# Terminal 2 — run the demo script
+# Terminal 2 — run the test suite
 python -m tests.test_ask
 ```
+
+The script inserts a 15-second delay between questions to stay within Groq's free-tier token budget. A passing run takes approximately 90 seconds and prints `6/6 passed` with per-question response times.

@@ -1,0 +1,39 @@
+# Local virtual environments
+archivox/
+.venv/
+venv/
+env/
+
+# Downloaded model weights (Docker re-downloads at build time)
+models/
+
+# ChromaDB index (mounted as a named volume at runtime)
+chroma_db/
+chroma_db_backup/
+
+# Secrets
+.env
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Git
+.git/
+.gitignore
+
+# IDE / editor
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Documentation and local notes
+benchmarks.md
+projecttodo.md
+assets/
+*.bak
+*.bak2

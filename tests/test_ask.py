@@ -1,12 +1,14 @@
 """
 Sanity check tests for the /ask endpoint.
 
-Covers the 5 question types from the evaluation criteria:
+Covers the 5 question types from the evaluation criteria plus a hard
+multi-topic regression case:
 1. Factual question about a specific event
 2. Synthesis question spanning two parts of the transcript
 3. Question about a named person or location
 4. Vague / broadly phrased question
 5. Out-of-scope question (answer not in transcript)
+6. Hard multi-topic query asserting 3/3 topic coverage from source excerpts
 
 Usage:
     Start the server first:
@@ -69,6 +71,18 @@ QUESTIONS = [
             "answer_includes": ["don't have enough information"],
         },
     },
+    {
+        "type": "6. Multi-topic",
+        "question": "What were the dangers of Borax, Celluloid, and Asbestos?",
+        "checks": {
+            "sources_non_empty": True,
+            "sources_cover_topics": {
+                "borax": ["borax", "brucella", "bacteria"],
+                "celluloid": ["celluloid", "parkesine", "flammable", "combust"],
+                "asbestos": ["asbestos", "mesothelioma", "fibres", "fibers"],
+            },
+        },
+    },
 ]
 
 
@@ -83,10 +97,13 @@ def _run_checks(
     normalized_answer = (
         data.get("answer", "")
         .lower()
-        .replace("’", "'")
-        .replace("`", "'")
+        .replace("’", "’")
+        .replace("`", "’")
     )
     sources = data.get("sources", [])
+    combined_sources = " ".join(
+        src.get("excerpt", "") for src in sources
+    ).lower()
 
     if checks.get("sources_non_empty") and not sources:
         failures.append("expected sources but got none")
@@ -96,7 +113,11 @@ def _run_checks(
 
     for term in checks.get("answer_includes", []):
         if term.lower() not in normalized_answer:
-            failures.append(f"answer missing expected term: '{term}'")
+            failures.append(f"answer missing expected term: ‘{term}’")
+
+    for topic, markers in checks.get("sources_cover_topics", {}).items():
+        if not any(marker.lower() in combined_sources for marker in markers):
+            failures.append(f"sources do not cover topic ‘{topic}’")
 
     if elapsed > 30:
         failures.append(f"response time {elapsed:.2f}s exceeds 30s limit")

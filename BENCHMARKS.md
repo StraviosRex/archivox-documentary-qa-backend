@@ -200,6 +200,24 @@ Topic coverage remained stable across paraphrases, although evidence specificity
 
 ---
 
+## Clean-start verification
+
+Run after deleting `chroma_db/` entirely. Server rebuilt the index from scratch on startup (`Indexed 259 chunks`). No warm cache, no prior state.
+
+| # | Question type | Time |
+|---|---|---|
+| 1 | Factual | 3.40s |
+| 2 | Synthesis | 4.23s |
+| 3 | Named person/location | 2.88s |
+| 4 | Vague | 3.61s |
+| 5 | Out-of-scope | 3.18s |
+| 6 | Multi-topic | 3.50s |
+| | **Average** | **3.47s** |
+
+Assertions: 6/6 passed. Multi-topic sources identical to warm-cache runs (`01:25:30`, `00:13:21`, `00:53:28`). Retrieval is deterministic across cold and warm starts.
+
+---
+
 ## Raw output
 
 ```

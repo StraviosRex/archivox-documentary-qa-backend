@@ -12,7 +12,7 @@ archivox/
 
 # --- ChromaDB persistence ---
 chroma_db/
-
+chroma_db_backup/
 # --- Downloaded model weights ---
 models/
 
