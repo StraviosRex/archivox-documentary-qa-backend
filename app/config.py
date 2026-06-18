@@ -36,7 +36,7 @@ class Settings(BaseSettings):
 
     # Embedding/chunking
     embedding_model: str = Field(default="all-MiniLM-L6-v2")
-    chunk_window_size: int = Field(default=3)
+    chunk_window_size: int = Field(default=2)
     chunk_overlap: int = Field(default=1)
 
     # Paths
