@@ -494,7 +494,7 @@ def log_retrieved_chunks(
         chunks,
         start=1,
     ):
-        logger.info(
+        logger.debug(
             (
                 "Retrieved rank=%s "
                 "timestamp=%s-%s "

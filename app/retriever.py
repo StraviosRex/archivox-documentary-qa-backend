@@ -712,7 +712,7 @@ def _build_candidates(
         :candidate_limit
     ]
 
-    logger.info(
+    logger.debug(
         "Candidates: dense=%s lexical=%s",
         len(dense_chunks),
         len(lexical_candidates),
@@ -1162,7 +1162,7 @@ def retrieve(
     else:
         excluded_era = None
 
-    logger.info(
+    logger.debug(
         "Era filter: query_era=%s excluded_era=%s",
         query_era,
         excluded_era,
@@ -1174,7 +1174,7 @@ def retrieve(
             if c.get("era") != excluded_era
         ]
 
-    logger.info(
+    logger.debug(
         "Era sample (first 3 chunks): %s",
         [(c.get("id"), c.get("era")) for c in all_chunks[:3]],
     )
@@ -1276,26 +1276,28 @@ def retrieve(
     context_chars = sum(len(c["text"]) for c in selected)
 
     logger.info(
+        "Retrieval completed. mode=%s selected=%s total_ms=%s",
+        mode,
+        len(selected),
+        t_total_ms,
+    )
+    logger.debug(
         (
-            "Retrieval completed. mode=%s "
-            "dense=%s merged=%s ce_pool=%s relevant=%s selected=%s "
+            "Retrieval diagnostics: dense=%s merged=%s ce_pool=%s relevant=%s "
             "context_chars=%s "
-            "dense_ms=%s build_ms=%s ce_ms=%s filter_ms=%s select_ms=%s total_ms=%s "
+            "dense_ms=%s build_ms=%s ce_ms=%s filter_ms=%s select_ms=%s "
             "ce_top_score=%s"
         ),
-        mode,
         len(dense_chunks),
         len(candidates),
         ce_candidate_count,
         len(relevant),
-        len(selected),
         context_chars,
         t_dense_ms,
         t_build_ms,
         t_ce_ms,
         t_filter_ms,
         t_select_ms,
-        t_total_ms,
         round(candidates[0]["cross_encoder_score"], 3) if candidates and "cross_encoder_score" in candidates[0] else None,
     )
 
