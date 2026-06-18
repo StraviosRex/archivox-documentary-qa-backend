@@ -64,7 +64,7 @@ All three keys (`GROQ_API_KEY`, `OPENROUTER_API_KEY`, `GEMINI_API_KEY`) are list
 - **Google Gemini** - sign in at [aistudio.google.com](https://aistudio.google.com), click *Get API key*, and create a key in a new or existing project. Free tier covers Gemini 2.5 Flash with generous daily limits.
 - **OpenRouter** - create an account at [openrouter.ai](https://openrouter.ai), go to *Keys*, and generate a key. Free-tier models (including `openrouter/free`) are available without adding credits.
 
-**Fully local (no API key):** Install [Ollama](https://ollama.com), run `ollama pull llama3.2:3b`, start `ollama serve`, and set `LLM_PROFILE=ollama_llama32_3b`. No internet connection required after the model is downloaded.
+**Fully local (no API key):** Install [Ollama](https://ollama.com), pull any model (e.g. `ollama pull llama3.2:3b`), and start `ollama serve`. The UI auto-discovers all locally available Ollama models and lists them in the profile dropdown. Set `OLLAMA_BASE_URL=http://localhost:11434/v1` in `.env` for local runs, or `http://host.docker.internal:11434/v1` when running inside Docker. No internet connection required after the model is downloaded.
 
 **Switching providers** requires no code changes, in either of two ways:
 
@@ -107,6 +107,8 @@ docker compose up --build
 ```
 
 The first build downloads CPU-only PyTorch and both ML models (`all-MiniLM-L6-v2` and `cross-encoder/ms-marco-MiniLM-L-6-v2`) into the image layers - this takes a few minutes but is cached for all subsequent builds. On first startup the transcript is indexed into a named volume (`chroma_data`), which persists across container restarts so subsequent starts are fast.
+
+**Using Ollama with Docker:** from inside the container, `localhost` points to the container itself, not your machine. Make sure `.env` has `OLLAMA_BASE_URL=http://host.docker.internal:11434/v1` — this is already the default in `.env.example`. With `ollama serve` running on the host, the container will reach it correctly and the UI will auto-discover your models.
 
 ## Performance
 
@@ -216,7 +218,7 @@ Profiles are defined in [config/models.yaml](config/models.yaml). The active pro
 | `groq_llama70b` | Groq | Llama 3.3 70B |
 | `gemini_flash` | Google | Gemini 2.5 Flash |
 | `openrouter_free_router` | OpenRouter | Auto-routed free model |
-| `ollama_llama32_3b` | Ollama (local) | Llama 3.2 3B |
+| `ollama` | Ollama | Auto-discovered from running Ollama instance |
 
 OpenRouter profiles with fallback models automatically retry on other free models if the primary is unavailable. This trades consistency for availability, the underlying model can vary between requests, so it is recommended as a last-resort profile rather than the default. Ollama profiles require no API key but require a local Ollama installation and are not used as the default given typical laptop hardware constraints.
 
@@ -234,7 +236,7 @@ All settings can be set in `.env`. See [.env.example](.env.example) for the full
 | `GROQ_API_KEY` | - | Groq API key |
 | `OPENROUTER_API_KEY` | - | OpenRouter API key |
 | `GEMINI_API_KEY` | - | Gemini API key |
-| `OLLAMA_BASE_URL` | `http://localhost:11434/v1` | Ollama endpoint |
+| `OLLAMA_BASE_URL` | `http://localhost:11434/v1` | Ollama endpoint. Use `http://host.docker.internal:11434/v1` when running inside Docker |
 | `TOP_K` | `5` | Chunks retrieved per query |
 | `SOURCES_IN_RESPONSE` | `3` | Sources returned in the response |
 | `SIMILARITY_THRESHOLD` | `0.48` | Max cosine distance for a chunk to be included |

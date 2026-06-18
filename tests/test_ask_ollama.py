@@ -2,7 +2,7 @@
 Sanity check tests for the /ask endpoint using the local Ollama profile.
 
 Covers the same 5 question types as test_ask.py but targets the
-ollama_llama32_3b profile (host.docker.internal:11434). No rate-limit delay
+ollama profile. No rate-limit delay
 is needed since Ollama runs locally.
 
 Usage:
@@ -20,7 +20,7 @@ import sys
 import time
 
 BASE_URL = "http://localhost:8000"
-PROFILE = "ollama_llama32_3b"
+PROFILE = "ollama::llama3.2:3b"
 
 # Ollama runs locally so there is no token-rate budget to worry about.
 # A small pause is kept to avoid hammering the embedding model between requests.

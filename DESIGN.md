@@ -66,7 +66,7 @@ LLM backends are configured as named profiles in `config/models.yaml`, each spec
 
 `groq_llama8b` is the default; it was the most extensively exercised profile during retrieval and threshold tuning. Ollama was tested with llama3.2:3b across all five evaluation categories and produced correct, well-grounded answers in every case, including accurate refusal on the out-of-scope question. 
 
-It is not the default since it requires a local Ollama installation the reviewer may not have, but it is a genuinely viable fully-offline option, not just an architectural placeholder.
+It is not the default since it requires a local Ollama installation the reviewer may not have, but it is a genuinely viable fully-offline option, not just an architectural placeholder. When running inside Docker, `OLLAMA_BASE_URL` must be set to `http://host.docker.internal:11434/v1` (the `.env.example` has this by the default) — `localhost` from inside the container resolves to the container itself, not the host where Ollama is running. If the repo is cloned to the machine directly, OLLAMA_BASE_URL should be set to "http://localhost:11434/v1".
 
 ## 5. API Response Construction
 

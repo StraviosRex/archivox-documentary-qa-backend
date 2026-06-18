@@ -7,6 +7,7 @@ services:
       - .env
     environment:
       - HF_HUB_OFFLINE=1
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434/v1}
     volumes:
       - chroma_data:/app/chroma_db
 

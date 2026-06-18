@@ -540,7 +540,7 @@ async def profiles():
     """Return frontend-safe LLM profile metadata."""
     return {
         "default_profile": settings.llm_profile,
-        "profiles": list_public_profiles(),
+        "profiles": await list_public_profiles(),
     }
 
 
