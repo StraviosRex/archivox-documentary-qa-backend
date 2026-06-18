@@ -4,7 +4,7 @@ A documentary Q&A backend. Ask natural-language questions and receive answers gr
 
 ## How it works
 
-At startup, Archivox parses a plain-text transcript, splits it into overlapping chunks, embeds them with a local sentence-transformer model, and stores the index in ChromaDB. When a question arrives, the backend runs hybrid retrieval (dense vector search + lexical fallback), passes the top chunks to a configurable LLM, and returns a structured answer with timestamp-linked source references.
+At startup, Archivox parses a plain-text transcript, splits it into overlapping chunks, embeds them with a local sentence-transformer model, and stores the index in ChromaDB. When a question arrives, the backend runs hybrid retrieval (dense vector search + lexical fallback), re-ranks candidates with a cross-encoder, passes the top chunks to a configurable LLM, and returns a structured answer with timestamp-linked source references.
 
 The index is automatically rebuilt if the transcript file, embedding model, or chunking settings change. Otherwise the persisted index is reused, so subsequent starts are fast.
 
@@ -14,8 +14,9 @@ The index is automatically rebuilt if the transcript file, embedding model, or c
 |---|---|
 | API | FastAPI + Uvicorn |
 | Embeddings | `all-MiniLM-L6-v2` (sentence-transformers, runs locally) |
+| Re-ranker | `cross-encoder/ms-marco-MiniLM-L-6-v2` (runs locally) |
 | Vector store | ChromaDB (local persistence) |
-| LLM | Configurable — Groq, OpenRouter, Gemini, Ollama |
+| LLM | Configurable - Groq, OpenRouter, Gemini, Ollama |
 | Config | Pydantic Settings + `.env` + `config/models.yaml` |
 
 ## Quickstart

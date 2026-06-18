@@ -5,32 +5,105 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Archivox</title>
 
+  <script>
+    const saved = localStorage.getItem("theme");
+    if (saved) document.documentElement.setAttribute("data-theme", saved);
+  </script>
+
   <style>
+    :root {
+      --bg:               #f4f1ea;
+      --text:             #2f241d;
+      --container-bg:     #fffaf2;
+      --container-border: #d7c7aa;
+      --subtitle:         #6c5a47;
+      --input-border:     #c4b394;
+      --input-bg:         #fff;
+      --btn-bg:           #5c3d2e;
+      --btn-color:        #fff;
+      --btn-disabled:     #9b8977;
+      --box-bg:           #fff;
+      --box-border:       #d7c7aa;
+      --source-accent:    #8a6642;
+      --source-bg:        #f9f3e8;
+      --timestamp:        #4a3325;
+      --status:           #6c5a47;
+      --error:            #9b1c1c;
+      --meta-label:       #4a3325;
+    }
+
+    [data-theme="dark"] {
+      --bg:               #1a1410;
+      --text:             #e8ddd0;
+      --container-bg:     #2a1f17;
+      --container-border: #4a3828;
+      --subtitle:         #a08878;
+      --input-border:     #4a3828;
+      --input-bg:         #231a13;
+      --btn-bg:           #8a5a3c;
+      --btn-color:        #fff;
+      --btn-disabled:     #4a3828;
+      --box-bg:           #231a13;
+      --box-border:       #4a3828;
+      --source-accent:    #a07050;
+      --source-bg:        #2f2018;
+      --timestamp:        #c8a888;
+      --status:           #a08878;
+      --error:            #e05555;
+      --meta-label:       #c8a888;
+    }
+
     body {
       font-family: Arial, sans-serif;
-      background: #f4f1ea;
-      color: #2f241d;
+      background: var(--bg);
+      color: var(--text);
       margin: 0;
       padding: 0;
+      transition: background 0.2s, color 0.2s;
     }
 
     .container {
       max-width: 900px;
       margin: 40px auto;
       padding: 24px;
-      background: #fffaf2;
-      border: 1px solid #d7c7aa;
+      background: var(--container-bg);
+      border: 1px solid var(--container-border);
       border-radius: 12px;
       box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+      transition: background 0.2s, border-color 0.2s;
+    }
+
+    .header-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 0;
     }
 
     h1 {
-      margin-top: 0;
+      margin: 0;
       font-size: 32px;
     }
 
+    .theme-toggle {
+      background: none;
+      border: 1px solid var(--container-border);
+      border-radius: 6px;
+      padding: 6px 10px;
+      cursor: pointer;
+      font-size: 18px;
+      color: var(--text);
+      line-height: 1;
+      margin: 0;
+      transition: border-color 0.2s;
+    }
+
+    .theme-toggle:hover {
+      border-color: var(--source-accent);
+    }
+
     .subtitle {
-      color: #6c5a47;
+      color: var(--subtitle);
       margin-bottom: 24px;
     }
 
@@ -50,34 +123,39 @@
       width: 100%;
       padding: 10px;
       margin-bottom: 16px;
-      border: 1px solid #c4b394;
+      border: 1px solid var(--input-border);
       border-radius: 8px;
-      background: #fff;
+      background: var(--input-bg);
+      color: var(--text);
+      transition: background 0.2s, border-color 0.2s, color 0.2s;
     }
 
     textarea {
       width: 100%;
       min-height: 110px;
       padding: 12px;
-      border: 1px solid #c4b394;
+      border: 1px solid var(--input-border);
       border-radius: 8px;
       resize: vertical;
       box-sizing: border-box;
-      background: #fff;
+      background: var(--input-bg);
+      color: var(--text);
+      transition: background 0.2s, border-color 0.2s, color 0.2s;
     }
 
-    button {
+    button.ask-btn {
       margin-top: 12px;
       padding: 10px 18px;
       border: none;
       border-radius: 8px;
-      background: #5c3d2e;
-      color: #fff;
+      background: var(--btn-bg);
+      color: var(--btn-color);
       cursor: pointer;
+      transition: background 0.2s;
     }
 
-    button:disabled {
-      background: #9b8977;
+    button.ask-btn:disabled {
+      background: var(--btn-disabled);
       cursor: not-allowed;
     }
 
@@ -86,9 +164,10 @@
     .meta-box {
       margin-top: 24px;
       padding: 16px;
-      border: 1px solid #d7c7aa;
+      border: 1px solid var(--box-border);
       border-radius: 10px;
-      background: #fff;
+      background: var(--box-bg);
+      transition: background 0.2s, border-color 0.2s;
     }
 
     .answer-box h2,
@@ -105,16 +184,17 @@
 
     .source {
       padding: 12px;
-      border-left: 4px solid #8a6642;
-      background: #f9f3e8;
+      border-left: 4px solid var(--source-accent);
+      background: var(--source-bg);
       margin-bottom: 12px;
       border-radius: 6px;
+      transition: background 0.2s;
     }
 
     .timestamp {
       font-weight: bold;
       margin-bottom: 6px;
-      color: #4a3325;
+      color: var(--timestamp);
     }
 
     .excerpt {
@@ -123,11 +203,11 @@
 
     .status {
       margin-top: 12px;
-      color: #6c5a47;
+      color: var(--status);
     }
 
     .error {
-      color: #9b1c1c;
+      color: var(--error);
       font-weight: bold;
     }
 
@@ -140,7 +220,7 @@
 
     .meta-label {
       font-weight: bold;
-      color: #4a3325;
+      color: var(--meta-label);
     }
 
     .hidden {
@@ -151,7 +231,10 @@
 
 <body>
   <div class="container">
-    <h1>Archivox</h1>
+    <div class="header-row">
+      <h1>Archivox</h1>
+      <button class="theme-toggle" id="themeToggle" title="Toggle dark mode">🌙</button>
+    </div>
     <p class="subtitle">
       Ask questions about the documentary transcript. Answers are grounded in retrieved transcript excerpts.
     </p>
@@ -164,7 +247,7 @@
     <label for="questionInput">Question</label>
     <textarea id="questionInput" placeholder="Ask a question about the transcript..."></textarea>
 
-    <button id="askButton">Ask</button>
+    <button class="ask-btn" id="askButton">Ask</button>
 
     <div id="status" class="status"></div>
 
@@ -201,6 +284,7 @@
     const questionInput = document.getElementById("questionInput");
     const askButton = document.getElementById("askButton");
     const statusEl = document.getElementById("status");
+    const themeToggle = document.getElementById("themeToggle");
 
     const metaBox = document.getElementById("metaBox");
     const metaProfile = document.getElementById("metaProfile");
@@ -213,6 +297,21 @@
 
     const sourcesBox = document.getElementById("sourcesBox");
     const sourcesEl = document.getElementById("sources");
+
+    function applyTheme(theme) {
+      document.documentElement.setAttribute("data-theme", theme);
+      themeToggle.textContent = theme === "dark" ? "☀️" : "🌙";
+      themeToggle.title = theme === "dark" ? "Switch to light mode" : "Switch to dark mode";
+      localStorage.setItem("theme", theme);
+    }
+
+    const initialTheme = document.documentElement.getAttribute("data-theme") || "light";
+    applyTheme(initialTheme);
+
+    themeToggle.addEventListener("click", () => {
+      const current = document.documentElement.getAttribute("data-theme");
+      applyTheme(current === "dark" ? "light" : "dark");
+    });
 
     function setStatus(message, isError = false) {
       statusEl.textContent = message;
