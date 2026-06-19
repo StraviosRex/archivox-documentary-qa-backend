@@ -4,9 +4,9 @@ A documentary Q&A backend. Ask natural-language questions and receive answers gr
 
 ## How it works
 
-At startup, Archivox parses a plain-text transcript, splits it into overlapping chunks, embeds them with a local sentence-transformer model, and stores the index in ChromaDB. When a question arrives, the backend runs hybrid retrieval (dense vector search + lexical fallback), re-ranks candidates with a cross-encoder, passes the top chunks to a configurable LLM, and returns a structured answer with timestamp-linked source references.
+At startup, Archivox parses a plain-text transcript, splits it into overlapping chunks, attaches configured metadata tags, embeds chunks with a local sentence-transformer model, and stores the index in ChromaDB. When a question arrives, the backend runs hybrid retrieval (metadata filtering + dense vector search + lexical fallback), re-ranks candidates with a cross-encoder, passes the top chunks to a configurable LLM, and returns a structured answer with timestamp-linked source references.
 
-The index is automatically rebuilt if the transcript file, embedding model, or chunking settings change. Otherwise the persisted index is reused, so subsequent starts are fast.
+The index is automatically rebuilt if the transcript file, embedding model, chunking settings, or retrieval config change. Otherwise the persisted index is reused, so subsequent starts are fast.
 
 ![Retrieval pipeline](assets/archivox_real_pipeline.svg)
 
@@ -19,7 +19,7 @@ The index is automatically rebuilt if the transcript file, embedding model, or c
 | Re-ranker | `cross-encoder/ms-marco-MiniLM-L-6-v2` (runs locally) |
 | Vector store | ChromaDB (local persistence) |
 | LLM | Configurable - Groq, OpenRouter, Gemini, Ollama |
-| Config | Pydantic Settings + `.env` + `config/models.yaml` |
+| Config | Pydantic Settings + `.env` + `config/models.yaml` + `config/retrieval.yaml` |
 
 ## Quickstart
 
@@ -127,6 +127,9 @@ All times are end-to-end HTTP round trips (retrieval + LLM generation) measured 
 | 6 | Multi-topic (Borax / Celluloid / Asbestos) | 3.50s | PASS |
 | | **Average** | **3.47s** | **6/6** |
 
+This table records the original six-question performance benchmark. The current
+regression suite has 9 questions, including the later era-focused cases.
+
 ### Multi-topic retrieval coverage
 
 | Query | Topics retrieved |
@@ -229,6 +232,8 @@ To add a new profile, add an entry to `config/models.yaml`, no code changes need
 
 Retrieval is model-agnostic: the same source chunks are returned regardless of which profile is active, since retrieval runs entirely before the LLM is called. Switching to a larger model (e.g. `groq_llama70b`) does not change what evidence is retrieved, but produces more detailed and precisely grounded answers from the same excerpts.
 
+Retrieval tuning lives in [config/retrieval.yaml](config/retrieval.yaml). That file holds corpus-specific metadata rules, concept aliases, and broad/comparison query markers. For this transcript it defines historical `era` tags, but the code treats metadata fields generically so a different corpus can introduce fields like `speaker`, `topic`, or `chapter` without changing the chunker or retriever.
+
 ## Configuration reference
 
 All settings can be set in `.env`. See [.env.example](.env.example) for the full list.
@@ -250,9 +255,11 @@ All settings can be set in `.env`. See [.env.example](.env.example) for the full
 | `TRANSCRIPT_PATH` | `data/transcript.txt` | Path to transcript file |
 | `CHROMA_PERSIST_DIR` | `chroma_db` | Directory for ChromaDB persistence |
 
+Corpus-specific retrieval rules are configured in `config/retrieval.yaml`, not `.env`.
+
 ## Running the test suite
 
-`tests/test_ask.py` is an end-to-end regression suite covering the 6 question types from the evaluation criteria: factual, synthesis, named-entity, vague, out-of-scope, and a hard multi-topic query (Borax / Celluloid / Asbestos). Each question has programmatic assertions; the script exits with code 1 if any assertion fails and prints a pass/fail summary.
+`tests/test_ask.py` is an end-to-end regression suite covering 9 questions: the core evaluation types (factual, synthesis, named-entity, vague, out-of-scope, and a hard multi-topic query) plus era-focused checks for Tudor, post-war, and cross-era retrieval. Each question has programmatic assertions; the script exits with code 1 if any assertion fails and prints a pass/fail summary.
 
 ```bash
 # Terminal 1 - start the server
@@ -262,4 +269,12 @@ uvicorn app.main:app --port 8000
 python -m tests.test_ask
 ```
 
-The script inserts a 15-second delay between questions to stay within Groq's free-tier token budget. A passing run takes approximately 90 seconds and prints `6/6 passed` with per-question response times.
+The script inserts a 15-second delay between questions to stay within Groq's free-tier token budget. A passing run takes a little over two minutes and prints `9/9 passed` with per-question response times.
+
+For an additional citation check, start the server and run:
+
+```bash
+python -m tests.audit_sources
+```
+
+This verifies that returned source timestamps and excerpts trace back to `data/transcript.txt`. It is a grounding audit, not a semantic relevance judge.

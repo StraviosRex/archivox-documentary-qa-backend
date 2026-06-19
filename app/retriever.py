@@ -1,6 +1,17 @@
+"""
+Index and retrieve transcript evidence for Archivox.
+
+This module owns the retrieval pipeline end to end for the assignment-sized
+app: Chroma index lifecycle, query metadata filters, lexical candidate scoring,
+cross-encoder reranking, and final source selection. Keeping those pieces in
+one module avoids premature file splitting while the functions below keep each
+stage explicit and testable.
+"""
+
 import hashlib
 import json
 import logging
+import os
 import re
 import time
 from pathlib import Path
@@ -8,14 +19,17 @@ from typing import Any
 
 import chromadb
 
+os.environ.setdefault("USE_TF", "0")
+
 from sentence_transformers.cross_encoder import CrossEncoder
 
 from app.chunker import load_and_chunk
-from app.config import settings
+from app.config import load_retrieval_config, settings
 from app.embedder import embed_query, embed_texts
 
 
 logger = logging.getLogger(__name__)
+RETRIEVAL_CONFIG = load_retrieval_config()
 
 COLLECTION_NAME = "transcript"
 INDEX_METADATA_FILE = "index_metadata.json"
@@ -64,19 +78,14 @@ STOPWORDS = {
 }
 
 CONCEPT_ALIASES = {
-    "legislation": (
-        "law",
-        "laws",
-        "regulation",
-        "regulations",
-    ),
-    "weak": (
-        "not very strong",
-        "not particularly effective",
-        "ineffective",
-        "difficult to police",
-        "difficult to prove",
-    ),
+    str(term): tuple(str(alias) for alias in aliases)
+    for term, aliases in (
+        RETRIEVAL_CONFIG
+        .get("lexical", {})
+        .get("concept_aliases", {})
+        .items()
+    )
+    if isinstance(aliases, list)
 }
 
 QUESTION_WORDS = {
@@ -84,11 +93,13 @@ QUESTION_WORDS = {
     "where", "which", "whose", "whom",
 }
 
-DIVERSE_EVIDENCE_MARKERS = (
-    "both ", " together", "compare ", "compared ", "comparison", "respectively", "across ",
-    "different ways", "various ways", "overall", "in general", "throughout",
-    "everyday life", "multiple factors", "differ ", "different from", "difference",
-    "versus", "vs ",
+DIVERSE_EVIDENCE_MARKERS = tuple(
+    str(marker)
+    for marker in (
+        RETRIEVAL_CONFIG
+        .get("query_intent", {})
+        .get("diverse_evidence_markers", [])
+    )
 )
 
 MULTI_ITEM_LIST_PATTERN = re.compile(
@@ -101,18 +112,21 @@ BOTH_SUBJECT_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-EXPLICIT_COMPARISON_MARKERS = (
-    "compare ",
-    "compared ",
-    "comparison",
-    "differ ",
-    "different from",
-    "difference",
-    "versus",
-    "vs ",
+EXPLICIT_COMPARISON_MARKERS = tuple(
+    str(marker)
+    for marker in (
+        RETRIEVAL_CONFIG
+        .get("query_intent", {})
+        .get("explicit_comparison_markers", [])
+    )
 )
 
 _collection: chromadb.Collection | None = None
+
+
+# ---------------------------------------------------------------------------
+# Index lifecycle
+# ---------------------------------------------------------------------------
 
 
 def _transcript_hash(path: str) -> str:
@@ -150,10 +164,16 @@ def _current_index_metadata() -> dict[str, Any]:
     return {
         "transcript_path": str(Path(settings.transcript_path)),
         "transcript_hash": _transcript_hash(settings.transcript_path),
+        "retrieval_config_hash": hashlib.sha256(
+            json.dumps(
+                RETRIEVAL_CONFIG,
+                sort_keys=True,
+            ).encode("utf-8")
+        ).hexdigest(),
         "embedding_model": settings.embedding_model,
         "chunk_window_size": settings.chunk_window_size,
         "chunk_overlap": settings.chunk_overlap,
-        "index_version": "3",
+        "index_version": "6",
     }
 
 
@@ -220,6 +240,27 @@ def get_collection() -> chromadb.Collection:
     return _collection
 
 
+def _chunk_metadata_for_chroma(chunk: Any) -> dict[str, Any]:
+    """Return base plus configured scalar metadata for Chroma storage."""
+    metadata = {
+        "start_timestamp": chunk.start_timestamp,
+        "end_timestamp": chunk.end_timestamp,
+        "index": chunk.index,
+        "segment_start_index": chunk.segment_start_index,
+        "segment_end_index": chunk.segment_end_index,
+    }
+
+    metadata.update(
+        {
+            str(key): value
+            for key, value in chunk.metadata.items()
+            if isinstance(value, str | int | float | bool)
+        }
+    )
+
+    return metadata
+
+
 def _index_transcript(
     collection: chromadb.Collection,
 ) -> None:
@@ -247,14 +288,7 @@ def _index_transcript(
         embeddings=embeddings,
         documents=texts,
         metadatas=[
-            {
-                "start_timestamp": chunk.start_timestamp,
-                "end_timestamp": chunk.end_timestamp,
-                "index": chunk.index,
-                "segment_start_index": chunk.segment_start_index,
-                "segment_end_index": chunk.segment_end_index,
-                "era": chunk.era,
-            }
+            _chunk_metadata_for_chroma(chunk)
             for chunk in chunks
         ],
     )
@@ -263,6 +297,11 @@ def _index_transcript(
         "Indexed %s chunks into ChromaDB.",
         len(chunks),
     )
+
+
+# ---------------------------------------------------------------------------
+# Text normalization and lexical features
+# ---------------------------------------------------------------------------
 
 
 def _normalize_token(token: str) -> str:
@@ -479,13 +518,32 @@ def _has_strong_lexical_match(
     return False
 
 
+# ---------------------------------------------------------------------------
+# Chunk loading and metadata filtering
+# ---------------------------------------------------------------------------
+
+
 def _base_chunk(
     chunk_id: str,
     text: str,
     metadata: dict[str, Any],
 ) -> dict[str, Any]:
     """Create the internal representation of a stored transcript chunk."""
-    return {
+    base_keys = {
+        "start_timestamp",
+        "end_timestamp",
+        "index",
+        "segment_start_index",
+        "segment_end_index",
+    }
+
+    chunk_metadata = {
+        str(key): value
+        for key, value in metadata.items()
+        if key not in base_keys and value is not None
+    }
+
+    chunk = {
         "id": chunk_id,
         "text": text,
         "start_timestamp": metadata.get(
@@ -503,8 +561,12 @@ def _base_chunk(
         "segment_end_index": metadata.get(
             "segment_end_index"
         ),
-        "era": metadata.get("era", "general"),
+        "metadata": chunk_metadata,
     }
+
+    chunk.update(chunk_metadata)
+
+    return chunk
 
 
 def _load_all_chunks(
@@ -533,41 +595,159 @@ def _load_all_chunks(
     return chunks
 
 
-def _detect_query_era(query: str) -> str | None:
-    """Return 'victorian' or 'edwardian' if the query targets a specific era."""
-    lowered = query.lower()
-    has_victorian = "victorian" in lowered
-    has_edwardian = "edwardian" in lowered
+def _metadata_field_configs() -> dict[str, Any]:
+    """Return configured metadata field rules."""
+    fields = (
+        RETRIEVAL_CONFIG
+        .get("metadata", {})
+        .get("fields", {})
+    )
 
-    if has_victorian and not has_edwardian:
-        return "victorian"
+    return fields if isinstance(fields, dict) else {}
 
-    if has_edwardian and not has_victorian:
-        return "edwardian"
 
-    return None
+def _compile_metadata_query_patterns() -> dict[str, dict[str, Any]]:
+    """Build optional query-time metadata filters from retrieval config."""
+    fields = _metadata_field_configs()
+
+    if not fields:
+        return {}
+
+    compiled: dict[str, dict[str, Any]] = {}
+
+    for field_name, field_rule in fields.items():
+        if not isinstance(field_rule, dict):
+            continue
+
+        labels = field_rule.get("labels", {})
+
+        if not isinstance(labels, dict):
+            continue
+
+        compiled_labels: dict[str, re.Pattern] = {}
+
+        for label, label_rule in labels.items():
+            patterns = (
+                label_rule.get("query_patterns", [])
+                if isinstance(label_rule, dict)
+                else []
+            )
+
+            if not patterns:
+                continue
+
+            compiled_labels[str(label)] = re.compile(
+                "|".join(str(pattern) for pattern in patterns),
+                re.IGNORECASE,
+            )
+
+        if not compiled_labels:
+            continue
+
+        default_label = (
+            str(field_rule["default"])
+            if field_rule.get("default") is not None
+            else None
+        )
+
+        compiled[str(field_name)] = {
+            "default": default_label,
+            "labels": compiled_labels,
+        }
+
+    return compiled
+
+
+METADATA_QUERY_PATTERNS = _compile_metadata_query_patterns()
+
+
+def _detect_query_filters(query: str) -> dict[str, frozenset[str]]:
+    """Return metadata filters explicitly mentioned in the query."""
+    filters: dict[str, frozenset[str]] = {}
+
+    for field_name, field_rule in METADATA_QUERY_PATTERNS.items():
+        label_patterns = field_rule.get("labels", {})
+
+        matched_labels = {
+            label
+            for label, pattern in label_patterns.items()
+            if pattern.search(query)
+        }
+
+        if not matched_labels:
+            continue
+
+        default_label = field_rule.get("default")
+
+        if default_label:
+            matched_labels.add(str(default_label))
+
+        filters[field_name] = frozenset(matched_labels)
+
+    return filters
+
+
+def _chunk_matches_query_filters(
+    chunk: dict[str, Any],
+    query_filters: dict[str, frozenset[str]],
+) -> bool:
+    """Return True when a chunk satisfies all detected metadata filters."""
+    metadata = chunk.get("metadata", {})
+
+    for field_name, allowed_values in query_filters.items():
+        value = metadata.get(field_name, chunk.get(field_name))
+
+        if value not in allowed_values:
+            return False
+
+    return True
+
+
+def _where_from_query_filters(
+    query_filters: dict[str, frozenset[str]],
+) -> dict[str, Any] | None:
+    """Build a Chroma where clause from query metadata filters."""
+    if not query_filters:
+        return None
+
+    clauses = [
+        {
+            field_name: {
+                "$in": sorted(allowed_values),
+            }
+        }
+        for field_name, allowed_values in sorted(query_filters.items())
+    ]
+
+    if len(clauses) == 1:
+        return clauses[0]
+
+    return {"$and": clauses}
+
+
+# ---------------------------------------------------------------------------
+# Dense retrieval and candidate fusion
+# ---------------------------------------------------------------------------
 
 
 def _dense_results(
     collection: chromadb.Collection,
     query: str,
     candidate_limit: int,
+    where: dict | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Retrieve dense semantic candidates using the complete question."""
     query_embedding = embed_query(query)
 
-    results = collection.query(
-        query_embeddings=[query_embedding],
-        n_results=min(
-            candidate_limit,
-            collection.count(),
-        ),
-        include=[
-            "documents",
-            "metadatas",
-            "distances",
-        ],
-    )
+    query_kwargs: dict[str, Any] = {
+        "query_embeddings": [query_embedding],
+        "n_results": min(candidate_limit, collection.count()),
+        "include": ["documents", "metadatas", "distances"],
+    }
+    if where:
+        query_kwargs["where"] = where
+
+    results = collection.query(**query_kwargs)
 
     ids = results.get("ids", [[]])[0]
     documents = results.get("documents", [[]])[0]
@@ -645,6 +825,11 @@ def _decorate_chunk(
     )
 
     return decorated
+
+
+# ---------------------------------------------------------------------------
+# Cross-encoder reranking
+# ---------------------------------------------------------------------------
 
 
 def _apply_cross_encoder(
@@ -775,6 +960,11 @@ def _build_candidates(
     return candidates
 
 
+# ---------------------------------------------------------------------------
+# Relevance filtering and query intent
+# ---------------------------------------------------------------------------
+
+
 def _passes_relevance_filter(
     chunk: dict[str, Any],
 ) -> bool:
@@ -862,6 +1052,11 @@ def _strongest_chunk_covers_both(
         left_subject in anchor_terms
         and right_subject in anchor_terms
     )
+
+
+# ---------------------------------------------------------------------------
+# Final source selection
+# ---------------------------------------------------------------------------
 
 
 def _chunk_index(chunk: dict[str, Any]) -> int | None:
@@ -1110,6 +1305,11 @@ def _select_diverse_sources(
     return selected
 
 
+# ---------------------------------------------------------------------------
+# Public retrieval entry point
+# ---------------------------------------------------------------------------
+
+
 def retrieve(
     query: str,
     top_k: int | None = None,
@@ -1153,45 +1353,45 @@ def retrieve(
 
     all_chunks = _load_all_chunks(collection)
 
-    query_era = _detect_query_era(query)
-
-    if query_era == "victorian":
-        excluded_era = "edwardian"
-    elif query_era == "edwardian":
-        excluded_era = "victorian"
-    else:
-        excluded_era = None
+    query_filters = _detect_query_filters(query)
 
     logger.debug(
-        "Era filter: query_era=%s excluded_era=%s",
-        query_era,
-        excluded_era,
+        "Metadata filters: %s",
+        query_filters,
     )
 
-    if excluded_era:
+    if query_filters:
         all_chunks = [
-            c for c in all_chunks
-            if c.get("era") != excluded_era
+            chunk
+            for chunk in all_chunks
+            if _chunk_matches_query_filters(
+                chunk=chunk,
+                query_filters=query_filters,
+            )
         ]
 
     logger.debug(
-        "Era sample (first 3 chunks): %s",
-        [(c.get("id"), c.get("era")) for c in all_chunks[:3]],
+        "Metadata sample (first 3 chunks): %s",
+        [
+            (
+                chunk.get("id"),
+                chunk.get("metadata"),
+            )
+            for chunk in all_chunks[:3]
+        ],
     )
 
     t0 = time.perf_counter()
+
+    metadata_where = _where_from_query_filters(query_filters)
 
     t_dense_start = time.perf_counter()
     dense_chunks = _dense_results(
         collection=collection,
         query=query,
         candidate_limit=candidate_limit,
+        where=metadata_where,
     )
-    if excluded_era:
-        dense_chunks = {
-            k: v for k, v in dense_chunks.items()
-            if v.get("era") != excluded_era
-        }
     t_dense_ms = round((time.perf_counter() - t_dense_start) * 1000)
 
     t_build_start = time.perf_counter()

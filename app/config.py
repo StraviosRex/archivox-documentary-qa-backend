@@ -8,7 +8,9 @@ from pydantic import Field
 from pydantic_settings import BaseSettings
 
 
-MODELS_YAML = Path(__file__).resolve().parent.parent / "config" / "models.yaml"
+CONFIG_DIR = Path(__file__).resolve().parent.parent / "config"
+MODELS_YAML = CONFIG_DIR / "models.yaml"
+RETRIEVAL_YAML = CONFIG_DIR / "retrieval.yaml"
 
 
 class Settings(BaseSettings):
@@ -63,6 +65,20 @@ def load_model_profiles() -> dict[str, dict[str, Any]]:
         raise ValueError("config/models.yaml must contain a non-empty 'profiles' mapping.")
 
     return profiles
+
+
+def load_retrieval_config() -> dict[str, Any]:
+    """Load corpus-specific retrieval hints from config/retrieval.yaml."""
+    if not RETRIEVAL_YAML.exists():
+        return {}
+
+    with open(RETRIEVAL_YAML, "r", encoding="utf-8") as f:
+        data = yaml.safe_load(f) or {}
+
+    if not isinstance(data, dict):
+        raise ValueError("config/retrieval.yaml must contain a mapping.")
+
+    return data
 
 
 def _resolve_base_url(profile: dict[str, Any]) -> str:

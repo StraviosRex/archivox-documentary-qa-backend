@@ -1,5 +1,7 @@
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
+from app.config import load_retrieval_config
 
 
 @dataclass
@@ -10,22 +12,119 @@ class Chunk:
     index: int
     segment_start_index: int
     segment_end_index: int
-    era: str = "general"
+    metadata: dict[str, str] = field(default_factory=dict)
 
 
 TIMESTAMP_PATTERN = re.compile(r"^\d{2}:\d{2}:\d{2}$")
-VICTORIAN_PATTERN = re.compile(r"victorian", re.IGNORECASE)
-EDWARDIAN_PATTERN = re.compile(r"edwardian", re.IGNORECASE)
 
 
-def _detect_chunk_era(text: str) -> str:
-    victorian_count = len(VICTORIAN_PATTERN.findall(text))
-    edwardian_count = len(EDWARDIAN_PATTERN.findall(text))
-    if edwardian_count > victorian_count:
-        return "edwardian"
-    if victorian_count > edwardian_count:
-        return "victorian"
-    return "general"
+def _metadata_field_configs() -> dict:
+    """Return metadata field rules from retrieval config."""
+    retrieval_config = load_retrieval_config()
+    fields = (
+        retrieval_config
+        .get("metadata", {})
+        .get("fields", {})
+    )
+
+    return fields if isinstance(fields, dict) else {}
+
+
+def _compile_metadata_patterns() -> dict[str, dict]:
+    """Build optional corpus metadata classifiers from retrieval config."""
+    fields = _metadata_field_configs()
+
+    if not fields:
+        return {}
+
+    compiled: dict[str, dict] = {}
+
+    for field_name, field_rule in fields.items():
+        if not isinstance(field_rule, dict):
+            continue
+
+        labels = field_rule.get("labels", {})
+
+        if not isinstance(labels, dict):
+            continue
+
+        compiled_labels: dict[str, re.Pattern] = {}
+
+        for label, label_rule in labels.items():
+            patterns = (
+                label_rule.get("chunk_patterns", [])
+                if isinstance(label_rule, dict)
+                else []
+            )
+
+            if not patterns:
+                continue
+
+            compiled_labels[str(label)] = re.compile(
+                "|".join(str(pattern) for pattern in patterns),
+                re.IGNORECASE,
+            )
+
+        if not compiled_labels:
+            continue
+
+        default_label = (
+            str(field_rule["default"])
+            if field_rule.get("default") is not None
+            else None
+        )
+
+        compiled[str(field_name)] = {
+            "default": default_label,
+            "labels": compiled_labels,
+        }
+
+    return compiled
+
+
+_METADATA_PATTERNS = _compile_metadata_patterns()
+
+
+def _detect_chunk_metadata(text: str) -> dict[str, str]:
+    """Apply configured metadata field rules to transcript chunk text."""
+    metadata: dict[str, str] = {}
+
+    for field_name, field_rule in _METADATA_PATTERNS.items():
+        label_patterns = (
+            field_rule.get("labels", {})
+            if isinstance(field_rule, dict)
+            else {}
+        )
+
+        if not label_patterns:
+            continue
+
+        counts = {
+            label: len(pattern.findall(text))
+            for label, pattern in label_patterns.items()
+        }
+
+        max_count = max(counts.values())
+        default_label = field_rule.get("default")
+
+        if max_count == 0:
+            if default_label:
+                metadata[field_name] = str(default_label)
+
+            continue
+
+        dominant = [
+            label
+            for label, count in counts.items()
+            if count == max_count
+        ]
+
+        if len(dominant) == 1:
+            metadata[field_name] = dominant[0]
+        elif default_label:
+            metadata[field_name] = str(default_label)
+
+    return metadata
 
 
 def parse_transcript(filepath: str) -> list[tuple[str, str]]:
@@ -139,7 +238,7 @@ def create_chunks(
         else:
             end_timestamp = window[-1][0]
 
-        era = _detect_chunk_era(combined_text)
+        metadata = _detect_chunk_metadata(combined_text)
 
         chunks.append(
             Chunk(
@@ -149,7 +248,7 @@ def create_chunks(
                 index=len(chunks),
                 segment_start_index=start_index,
                 segment_end_index=end_index,
-                era=era,
+                metadata=metadata,
             )
         )
 

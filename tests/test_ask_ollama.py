@@ -1,9 +1,8 @@
 """
 Sanity check tests for the /ask endpoint using the local Ollama profile.
 
-Covers the same 5 question types as test_ask.py but targets the
-ollama profile. No rate-limit delay
-is needed since Ollama runs locally.
+Covers the same questions as test_ask.py but targets the Ollama profile.
+No rate-limit delay is needed since Ollama runs locally.
 
 Usage:
     Start Ollama and the server first:
@@ -19,6 +18,8 @@ import asyncio
 import sys
 import time
 
+from tests.test_ask import QUESTIONS
+
 BASE_URL = "http://localhost:8000"
 PROFILE = "ollama::llama3.2:3b"
 
@@ -29,48 +30,6 @@ DELAY_BETWEEN_REQUESTS_SECONDS = 2
 # Ollama on CPU is slower than a cloud API. 16s was observed in testing;
 # 120s gives comfortable headroom on slower machines.
 REQUEST_TIMEOUT_SECONDS = 120.0
-
-QUESTIONS = [
-    {
-        "type": "1. Factual",
-        "question": "How much borax could potentially kill a small child?",
-        "checks": {
-            "sources_non_empty": True,
-            "answer_includes": ["five", "gram"],
-        },
-    },
-    {
-        "type": "2. Synthesis",
-        "question": "How did food adulteration and the lack of food safety legislation together contribute to public health problems in Victorian England?",
-        "checks": {
-            "sources_non_empty": True,
-        },
-    },
-    {
-        "type": "3. Named person/location",
-        "question": "Who was Thomas Crapper and what did he invent?",
-        "checks": {
-            "sources_non_empty": True,
-            "answer_includes": ["crapper", "siphon"],
-        },
-    },
-    {
-        "type": "4. Vague",
-        "question": "What were the dangers in Victorian homes?",
-        "checks": {
-            "sources_non_empty": True,
-        },
-    },
-    {
-        "type": "5. Out-of-scope",
-        "question": "What role did the internet play in Victorian household safety?",
-        "checks": {
-            "sources_empty": True,
-            "answer_includes": ["don't have enough information"],
-        },
-    },
-]
-
 
 def _run_checks(
     data: dict,

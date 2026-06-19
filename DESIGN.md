@@ -14,13 +14,17 @@ I chose timestamp-based grouping because the transcript already provides useful 
 
 Each chunk stores its full text, start and end timestamps, and the indexes of its source segments. The API builds source references directly from this metadata, so every returned time range maps back to a real location in the transcript.
 
+The chunker also attaches configurable metadata tags from `config/retrieval.yaml`. For this transcript the active field is `era`, but the implementation treats metadata fields generically. This keeps the Python code from being tied to one documentary; another corpus could define fields such as `speaker`, `topic`, or `chapter` in YAML and reuse the same chunking and filtering flow.
+
 ## 2. Retrieval
 
 **Embedding model.** Chunk text is embedded locally with `all-MiniLM-L6-v2` from sentence-transformers, producing 384-dimensional vectors. The question is embedded with the same model, and semantic similarity is measured using cosine distance.
 
-**Vector store.** Embeddings and chunk metadata are stored in a persistent ChromaDB collection using an HNSW index. The application records the transcript hash, embedding model, and chunking settings alongside the index. If any of these inputs change, the index is rebuilt automatically.
+**Vector store.** Embeddings and chunk metadata are stored in a persistent ChromaDB collection using an HNSW index. The application records the transcript hash, embedding model, chunking settings, retrieval config hash, and index version alongside the index. If any of these inputs change, the index is rebuilt automatically.
 
-**Hybrid candidate retrieval.** Dense vector search works well for semantic similarity, but it can miss passages where exact wording matters, especially names, numbers, and specific terms. To compensate for this, Archivox also applies lexical scoring across the transcript. This considers query-term coverage, exact proper names, capitalized entities, numerical matches, concept aliases, and literal query terms.
+**Metadata filtering.** Query patterns in `config/retrieval.yaml` can detect metadata labels in the question. Matching labels are passed to Chroma as a `where` filter before dense retrieval, so irrelevant chunks can be pruned before reranking. The current config uses this for historical eras, while still keeping the mechanism generic.
+
+**Hybrid candidate retrieval.** Dense vector search works well for semantic similarity, but it can miss passages where exact wording matters, especially names, numbers, and specific terms. To compensate for this, Archivox also applies lexical scoring across the transcript. This considers query-term coverage, exact proper names, capitalized entities, numerical matches, configured concept aliases, and literal query terms.
 
 The dense and lexical results are merged and deduplicated. This gives the reranker a broader candidate pool that includes both semantically related passages and exact-term matches.
 
@@ -72,9 +76,15 @@ Groq, Gemini, OpenRouter, and Ollama are supported through OpenAI-compatible cha
 
 The default Groq configuration averaged approximately 3.47 seconds end to end with reranking enabled. Local Ollama inference completed in roughly 9 seconds. Both remain comfortably within the 30-second response-time requirement.
 
-## 5. What I Would Improve Given More Time
+## 5. API Response Construction
 
-* **BM25 lexical retrieval:** Replace the hand-tuned lexical scoring with BM25 to gain term-frequency saturation and document-length normalization while reducing manual weighting.
-* **Bounded candidate fusion:** Use Reciprocal Rank Fusion to combine dense and lexical rankings, while preserving strong per-topic candidates before cross-encoder reranking. This could reduce reranking latency without weakening multi-topic coverage.
+The API returns the generated answer, selected sources, and model metadata. The `sources` array is constructed by the backend from retrieved chunks, not by the LLM. This means timestamps, excerpts, and model/provider fields are deterministic parts of the response.
+
+If the answer uses the fixed insufficient-evidence refusal, the backend returns an empty `sources` list. I also added `tests/audit_sources.py` as a separate grounding check: it verifies that returned timestamps and excerpts can be traced back to `data/transcript.txt`. It does not judge semantic relevance; it only checks that citations are real.
+
+## 6. What I Would Improve Given More Time
+
+* **BM25 lexical retrieval:** Replace the hand-tuned lexical scoring with BM25 to gain term-frequency saturation and document-length normalization.
+* **Bounded candidate fusion:** Use rank fusion to combine dense and lexical rankings before cross-encoder reranking. This could reduce latency without weakening multi-topic coverage.
 * **Dynamic chunking:** Detect topic shifts and build variable-length chunks around content boundaries rather than always combining a fixed number of transcript segments.
 * **Streaming:** Add optional token streaming while preserving the existing source-reference structure.
