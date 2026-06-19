@@ -1,6 +1,8 @@
 import re
 from dataclasses import dataclass
 
+from app.config import load_retrieval_config
+
 
 @dataclass
 class Chunk:
@@ -14,20 +16,47 @@ class Chunk:
 
 
 TIMESTAMP_PATTERN = re.compile(r"^\d{2}:\d{2}:\d{2}$")
-VICTORIAN_PATTERN = re.compile(r"victorian", re.IGNORECASE)
-EDWARDIAN_PATTERN = re.compile(r"edwardian", re.IGNORECASE)
-TUDOR_PATTERN = re.compile(r"tudor|16th.century|sixteenth.century", re.IGNORECASE)
-POSTWAR_PATTERN = re.compile(r"post.?war|1950s|1950's", re.IGNORECASE)
 
-_ERA_PATTERNS = {
-    "victorian": VICTORIAN_PATTERN,
-    "edwardian": EDWARDIAN_PATTERN,
-    "tudor": TUDOR_PATTERN,
-    "postwar": POSTWAR_PATTERN,
-}
+
+def _compile_era_patterns() -> dict[str, re.Pattern]:
+    """Build optional corpus-era classifiers from retrieval config."""
+    retrieval_config = load_retrieval_config()
+    eras = (
+        retrieval_config
+        .get("metadata", {})
+        .get("eras", {})
+    )
+
+    if not isinstance(eras, dict):
+        return {}
+
+    compiled: dict[str, re.Pattern] = {}
+
+    for era, rule in eras.items():
+        patterns = (
+            rule.get("chunk_patterns", [])
+            if isinstance(rule, dict)
+            else []
+        )
+
+        if not patterns:
+            continue
+
+        compiled[str(era)] = re.compile(
+            "|".join(str(pattern) for pattern in patterns),
+            re.IGNORECASE,
+        )
+
+    return compiled
+
+
+_ERA_PATTERNS = _compile_era_patterns()
 
 
 def _detect_chunk_era(text: str) -> str:
+    if not _ERA_PATTERNS:
+        return "general"
+
     counts = {era: len(pattern.findall(text)) for era, pattern in _ERA_PATTERNS.items()}
     max_count = max(counts.values())
     if max_count == 0:

@@ -1,3 +1,7 @@
+import os
+
+os.environ.setdefault("USE_TF", "0")
+
 from sentence_transformers import SentenceTransformer
 
 from app.config import settings

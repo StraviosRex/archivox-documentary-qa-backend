@@ -1,6 +1,7 @@
 import hashlib
 import json
 import logging
+import os
 import re
 import time
 from pathlib import Path
@@ -8,14 +9,17 @@ from typing import Any
 
 import chromadb
 
+os.environ.setdefault("USE_TF", "0")
+
 from sentence_transformers.cross_encoder import CrossEncoder
 
 from app.chunker import load_and_chunk
-from app.config import settings
+from app.config import load_retrieval_config, settings
 from app.embedder import embed_query, embed_texts
 
 
 logger = logging.getLogger(__name__)
+RETRIEVAL_CONFIG = load_retrieval_config()
 
 COLLECTION_NAME = "transcript"
 INDEX_METADATA_FILE = "index_metadata.json"
@@ -64,19 +68,14 @@ STOPWORDS = {
 }
 
 CONCEPT_ALIASES = {
-    "legislation": (
-        "law",
-        "laws",
-        "regulation",
-        "regulations",
-    ),
-    "weak": (
-        "not very strong",
-        "not particularly effective",
-        "ineffective",
-        "difficult to police",
-        "difficult to prove",
-    ),
+    str(term): tuple(str(alias) for alias in aliases)
+    for term, aliases in (
+        RETRIEVAL_CONFIG
+        .get("lexical", {})
+        .get("concept_aliases", {})
+        .items()
+    )
+    if isinstance(aliases, list)
 }
 
 QUESTION_WORDS = {
@@ -84,11 +83,13 @@ QUESTION_WORDS = {
     "where", "which", "whose", "whom",
 }
 
-DIVERSE_EVIDENCE_MARKERS = (
-    "both ", " together", "compare ", "compared ", "comparison", "respectively", "across ",
-    "different ways", "various ways", "overall", "in general", "throughout",
-    "everyday life", "multiple factors", "differ ", "different from", "difference",
-    "versus", "vs ",
+DIVERSE_EVIDENCE_MARKERS = tuple(
+    str(marker)
+    for marker in (
+        RETRIEVAL_CONFIG
+        .get("query_intent", {})
+        .get("diverse_evidence_markers", [])
+    )
 )
 
 MULTI_ITEM_LIST_PATTERN = re.compile(
@@ -101,15 +102,13 @@ BOTH_SUBJECT_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-EXPLICIT_COMPARISON_MARKERS = (
-    "compare ",
-    "compared ",
-    "comparison",
-    "differ ",
-    "different from",
-    "difference",
-    "versus",
-    "vs ",
+EXPLICIT_COMPARISON_MARKERS = tuple(
+    str(marker)
+    for marker in (
+        RETRIEVAL_CONFIG
+        .get("query_intent", {})
+        .get("explicit_comparison_markers", [])
+    )
 )
 
 _collection: chromadb.Collection | None = None
@@ -150,10 +149,16 @@ def _current_index_metadata() -> dict[str, Any]:
     return {
         "transcript_path": str(Path(settings.transcript_path)),
         "transcript_hash": _transcript_hash(settings.transcript_path),
+        "retrieval_config_hash": hashlib.sha256(
+            json.dumps(
+                RETRIEVAL_CONFIG,
+                sort_keys=True,
+            ).encode("utf-8")
+        ).hexdigest(),
         "embedding_model": settings.embedding_model,
         "chunk_window_size": settings.chunk_window_size,
         "chunk_overlap": settings.chunk_overlap,
-        "index_version": "4",
+        "index_version": "5",
     }
 
 
@@ -533,12 +538,38 @@ def _load_all_chunks(
     return chunks
 
 
-ERA_QUERY_PATTERNS: dict[str, re.Pattern] = {
-    "victorian": re.compile(r"\bvictorian\b", re.IGNORECASE),
-    "edwardian": re.compile(r"\bedwardian\b", re.IGNORECASE),
-    "tudor": re.compile(r"\btudor\b|\b16th century\b|\bsixteenth century\b", re.IGNORECASE),
-    "postwar": re.compile(r"\bpost.?war\b|\b1950s\b|\b1950's\b", re.IGNORECASE),
-}
+def _compile_era_query_patterns() -> dict[str, re.Pattern]:
+    """Build optional query-time metadata filters from retrieval config."""
+    eras = (
+        RETRIEVAL_CONFIG
+        .get("metadata", {})
+        .get("eras", {})
+    )
+
+    if not isinstance(eras, dict):
+        return {}
+
+    compiled: dict[str, re.Pattern] = {}
+
+    for era, rule in eras.items():
+        patterns = (
+            rule.get("query_patterns", [])
+            if isinstance(rule, dict)
+            else []
+        )
+
+        if not patterns:
+            continue
+
+        compiled[str(era)] = re.compile(
+            "|".join(str(pattern) for pattern in patterns),
+            re.IGNORECASE,
+        )
+
+    return compiled
+
+
+ERA_QUERY_PATTERNS = _compile_era_query_patterns()
 
 
 def _detect_query_era(query: str) -> frozenset[str]:
