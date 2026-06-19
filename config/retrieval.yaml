@@ -1,33 +1,36 @@
 metadata:
-  eras:
-    victorian:
-      chunk_patterns:
-        - '\bvictorian\b'
-      query_patterns:
-        - '\bvictorian\b'
-    edwardian:
-      chunk_patterns:
-        - '\bedwardian\b'
-      query_patterns:
-        - '\bedwardian\b'
-    tudor:
-      chunk_patterns:
-        - '\btudor\b'
-        - '\b16th century\b'
-        - '\bsixteenth century\b'
-      query_patterns:
-        - '\btudor\b'
-        - '\b16th century\b'
-        - '\bsixteenth century\b'
-    postwar:
-      chunk_patterns:
-        - '\bpost.?war\b'
-        - '\b1950s\b'
-        - '\b1950''s\b'
-      query_patterns:
-        - '\bpost.?war\b'
-        - '\b1950s\b'
-        - '\b1950''s\b'
+  fields:
+    era:
+      default: general
+      labels:
+        victorian:
+          chunk_patterns:
+            - '\bvictorian\b'
+          query_patterns:
+            - '\bvictorian\b'
+        edwardian:
+          chunk_patterns:
+            - '\bedwardian\b'
+          query_patterns:
+            - '\bedwardian\b'
+        tudor:
+          chunk_patterns:
+            - '\btudor\b'
+            - '\b16th century\b'
+            - '\bsixteenth century\b'
+          query_patterns:
+            - '\btudor\b'
+            - '\b16th century\b'
+            - '\bsixteenth century\b'
+        postwar:
+          chunk_patterns:
+            - '\bpost.?war\b'
+            - '\b1950s\b'
+            - '\b1950''s\b'
+          query_patterns:
+            - '\bpost.?war\b'
+            - '\b1950s\b'
+            - '\b1950''s\b'
 
 lexical:
   concept_aliases:

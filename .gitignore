@@ -38,8 +38,10 @@ AGENT_BRIEF.md
 .claude/settings.local.json
 tasks.md
 prompt.py.bak
+retrieval_pipeline.md
 todo.md
 projecttodo.md
+LOCAL_BRANCH_HANDOFF.md
 # --- One-off diagnostic scripts ---
 debug_lexical.py
 *.bak

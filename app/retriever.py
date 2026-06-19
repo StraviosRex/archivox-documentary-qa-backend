@@ -1,3 +1,13 @@
+"""
+Index and retrieve transcript evidence for Archivox.
+
+This module owns the retrieval pipeline end to end for the assignment-sized
+app: Chroma index lifecycle, query metadata filters, lexical candidate scoring,
+cross-encoder reranking, and final source selection. Keeping those pieces in
+one module avoids premature file splitting while the functions below keep each
+stage explicit and testable.
+"""
+
 import hashlib
 import json
 import logging
@@ -114,6 +124,11 @@ EXPLICIT_COMPARISON_MARKERS = tuple(
 _collection: chromadb.Collection | None = None
 
 
+# ---------------------------------------------------------------------------
+# Index lifecycle
+# ---------------------------------------------------------------------------
+
+
 def _transcript_hash(path: str) -> str:
     """Return a SHA256 hash of the transcript file."""
     transcript_path = Path(path)
@@ -158,7 +173,7 @@ def _current_index_metadata() -> dict[str, Any]:
         "embedding_model": settings.embedding_model,
         "chunk_window_size": settings.chunk_window_size,
         "chunk_overlap": settings.chunk_overlap,
-        "index_version": "5",
+        "index_version": "6",
     }
 
 
@@ -225,6 +240,27 @@ def get_collection() -> chromadb.Collection:
     return _collection
 
 
+def _chunk_metadata_for_chroma(chunk: Any) -> dict[str, Any]:
+    """Return base plus configured scalar metadata for Chroma storage."""
+    metadata = {
+        "start_timestamp": chunk.start_timestamp,
+        "end_timestamp": chunk.end_timestamp,
+        "index": chunk.index,
+        "segment_start_index": chunk.segment_start_index,
+        "segment_end_index": chunk.segment_end_index,
+    }
+
+    metadata.update(
+        {
+            str(key): value
+            for key, value in chunk.metadata.items()
+            if isinstance(value, str | int | float | bool)
+        }
+    )
+
+    return metadata
+
+
 def _index_transcript(
     collection: chromadb.Collection,
 ) -> None:
@@ -252,14 +288,7 @@ def _index_transcript(
         embeddings=embeddings,
         documents=texts,
         metadatas=[
-            {
-                "start_timestamp": chunk.start_timestamp,
-                "end_timestamp": chunk.end_timestamp,
-                "index": chunk.index,
-                "segment_start_index": chunk.segment_start_index,
-                "segment_end_index": chunk.segment_end_index,
-                "era": chunk.era,
-            }
+            _chunk_metadata_for_chroma(chunk)
             for chunk in chunks
         ],
     )
@@ -268,6 +297,11 @@ def _index_transcript(
         "Indexed %s chunks into ChromaDB.",
         len(chunks),
     )
+
+
+# ---------------------------------------------------------------------------
+# Text normalization and lexical features
+# ---------------------------------------------------------------------------
 
 
 def _normalize_token(token: str) -> str:
@@ -484,13 +518,32 @@ def _has_strong_lexical_match(
     return False
 
 
+# ---------------------------------------------------------------------------
+# Chunk loading and metadata filtering
+# ---------------------------------------------------------------------------
+
+
 def _base_chunk(
     chunk_id: str,
     text: str,
     metadata: dict[str, Any],
 ) -> dict[str, Any]:
     """Create the internal representation of a stored transcript chunk."""
-    return {
+    base_keys = {
+        "start_timestamp",
+        "end_timestamp",
+        "index",
+        "segment_start_index",
+        "segment_end_index",
+    }
+
+    chunk_metadata = {
+        str(key): value
+        for key, value in metadata.items()
+        if key not in base_keys and value is not None
+    }
+
+    chunk = {
         "id": chunk_id,
         "text": text,
         "start_timestamp": metadata.get(
@@ -508,8 +561,12 @@ def _base_chunk(
         "segment_end_index": metadata.get(
             "segment_end_index"
         ),
-        "era": metadata.get("era", "general"),
+        "metadata": chunk_metadata,
     }
+
+    chunk.update(chunk_metadata)
+
+    return chunk
 
 
 def _load_all_chunks(
@@ -538,47 +595,139 @@ def _load_all_chunks(
     return chunks
 
 
-def _compile_era_query_patterns() -> dict[str, re.Pattern]:
-    """Build optional query-time metadata filters from retrieval config."""
-    eras = (
+def _metadata_field_configs() -> dict[str, Any]:
+    """Return configured metadata field rules."""
+    fields = (
         RETRIEVAL_CONFIG
         .get("metadata", {})
-        .get("eras", {})
+        .get("fields", {})
     )
 
-    if not isinstance(eras, dict):
+    return fields if isinstance(fields, dict) else {}
+
+
+def _compile_metadata_query_patterns() -> dict[str, dict[str, Any]]:
+    """Build optional query-time metadata filters from retrieval config."""
+    fields = _metadata_field_configs()
+
+    if not fields:
         return {}
 
-    compiled: dict[str, re.Pattern] = {}
+    compiled: dict[str, dict[str, Any]] = {}
 
-    for era, rule in eras.items():
-        patterns = (
-            rule.get("query_patterns", [])
-            if isinstance(rule, dict)
-            else []
-        )
-
-        if not patterns:
+    for field_name, field_rule in fields.items():
+        if not isinstance(field_rule, dict):
             continue
 
-        compiled[str(era)] = re.compile(
-            "|".join(str(pattern) for pattern in patterns),
-            re.IGNORECASE,
+        labels = field_rule.get("labels", {})
+
+        if not isinstance(labels, dict):
+            continue
+
+        compiled_labels: dict[str, re.Pattern] = {}
+
+        for label, label_rule in labels.items():
+            patterns = (
+                label_rule.get("query_patterns", [])
+                if isinstance(label_rule, dict)
+                else []
+            )
+
+            if not patterns:
+                continue
+
+            compiled_labels[str(label)] = re.compile(
+                "|".join(str(pattern) for pattern in patterns),
+                re.IGNORECASE,
+            )
+
+        if not compiled_labels:
+            continue
+
+        default_label = (
+            str(field_rule["default"])
+            if field_rule.get("default") is not None
+            else None
         )
+
+        compiled[str(field_name)] = {
+            "default": default_label,
+            "labels": compiled_labels,
+        }
 
     return compiled
 
 
-ERA_QUERY_PATTERNS = _compile_era_query_patterns()
+METADATA_QUERY_PATTERNS = _compile_metadata_query_patterns()
 
 
-def _detect_query_era(query: str) -> frozenset[str]:
-    """Return the set of eras explicitly mentioned in the query."""
-    return frozenset(
-        era
-        for era, pattern in ERA_QUERY_PATTERNS.items()
-        if pattern.search(query)
-    )
+def _detect_query_filters(query: str) -> dict[str, frozenset[str]]:
+    """Return metadata filters explicitly mentioned in the query."""
+    filters: dict[str, frozenset[str]] = {}
+
+    for field_name, field_rule in METADATA_QUERY_PATTERNS.items():
+        label_patterns = field_rule.get("labels", {})
+
+        matched_labels = {
+            label
+            for label, pattern in label_patterns.items()
+            if pattern.search(query)
+        }
+
+        if not matched_labels:
+            continue
+
+        default_label = field_rule.get("default")
+
+        if default_label:
+            matched_labels.add(str(default_label))
+
+        filters[field_name] = frozenset(matched_labels)
+
+    return filters
+
+
+def _chunk_matches_query_filters(
+    chunk: dict[str, Any],
+    query_filters: dict[str, frozenset[str]],
+) -> bool:
+    """Return True when a chunk satisfies all detected metadata filters."""
+    metadata = chunk.get("metadata", {})
+
+    for field_name, allowed_values in query_filters.items():
+        value = metadata.get(field_name, chunk.get(field_name))
+
+        if value not in allowed_values:
+            return False
+
+    return True
+
+
+def _where_from_query_filters(
+    query_filters: dict[str, frozenset[str]],
+) -> dict[str, Any] | None:
+    """Build a Chroma where clause from query metadata filters."""
+    if not query_filters:
+        return None
+
+    clauses = [
+        {
+            field_name: {
+                "$in": sorted(allowed_values),
+            }
+        }
+        for field_name, allowed_values in sorted(query_filters.items())
+    ]
+
+    if len(clauses) == 1:
+        return clauses[0]
+
+    return {"$and": clauses}
+
+
+# ---------------------------------------------------------------------------
+# Dense retrieval and candidate fusion
+# ---------------------------------------------------------------------------
 
 
 def _dense_results(
@@ -676,6 +825,11 @@ def _decorate_chunk(
     )
 
     return decorated
+
+
+# ---------------------------------------------------------------------------
+# Cross-encoder reranking
+# ---------------------------------------------------------------------------
 
 
 def _apply_cross_encoder(
@@ -806,6 +960,11 @@ def _build_candidates(
     return candidates
 
 
+# ---------------------------------------------------------------------------
+# Relevance filtering and query intent
+# ---------------------------------------------------------------------------
+
+
 def _passes_relevance_filter(
     chunk: dict[str, Any],
 ) -> bool:
@@ -893,6 +1052,11 @@ def _strongest_chunk_covers_both(
         left_subject in anchor_terms
         and right_subject in anchor_terms
     )
+
+
+# ---------------------------------------------------------------------------
+# Final source selection
+# ---------------------------------------------------------------------------
 
 
 def _chunk_index(chunk: dict[str, Any]) -> int | None:
@@ -1141,6 +1305,11 @@ def _select_diverse_sources(
     return selected
 
 
+# ---------------------------------------------------------------------------
+# Public retrieval entry point
+# ---------------------------------------------------------------------------
+
+
 def retrieve(
     query: str,
     top_k: int | None = None,
@@ -1184,38 +1353,44 @@ def retrieve(
 
     all_chunks = _load_all_chunks(collection)
 
-    query_eras = _detect_query_era(query)
+    query_filters = _detect_query_filters(query)
 
     logger.debug(
-        "Era filter: query_eras=%s",
-        query_eras,
+        "Metadata filters: %s",
+        query_filters,
     )
 
-    if query_eras:
-        allowed = query_eras | {"general"}
+    if query_filters:
         all_chunks = [
-            c for c in all_chunks
-            if c.get("era") in allowed
+            chunk
+            for chunk in all_chunks
+            if _chunk_matches_query_filters(
+                chunk=chunk,
+                query_filters=query_filters,
+            )
         ]
 
     logger.debug(
-        "Era sample (first 3 chunks): %s",
-        [(c.get("id"), c.get("era")) for c in all_chunks[:3]],
+        "Metadata sample (first 3 chunks): %s",
+        [
+            (
+                chunk.get("id"),
+                chunk.get("metadata"),
+            )
+            for chunk in all_chunks[:3]
+        ],
     )
 
     t0 = time.perf_counter()
 
-    era_where: dict | None = None
-    if query_eras:
-        era_list = list(query_eras | {"general"})
-        era_where = {"era": {"$in": era_list}}
+    metadata_where = _where_from_query_filters(query_filters)
 
     t_dense_start = time.perf_counter()
     dense_chunks = _dense_results(
         collection=collection,
         query=query,
         candidate_limit=candidate_limit,
-        where=era_where,
+        where=metadata_where,
     )
     t_dense_ms = round((time.perf_counter() - t_dense_start) * 1000)
 
