@@ -1,14 +1,17 @@
 """
 Sanity check tests for the /ask endpoint.
 
-Covers the 5 question types from the evaluation criteria plus a hard
-multi-topic regression case:
+Covers the 5 question types from the evaluation criteria plus regression cases
+for multi-topic retrieval and cross-era filtering:
 1. Factual question about a specific event
 2. Synthesis question spanning two parts of the transcript
 3. Question about a named person or location
 4. Vague / broadly phrased question
 5. Out-of-scope question (answer not in transcript)
 6. Hard multi-topic query asserting 3/3 topic coverage from source excerpts
+7. Tudor era question (era filter: include tudor only)
+8. Post-war era question (era filter: include postwar only)
+9. Cross-era question (no era filter; diverse mode)
 
 Usage:
     Start the server first:
@@ -81,6 +84,33 @@ QUESTIONS = [
                 "celluloid": ["celluloid", "parkesine", "flammable", "combust"],
                 "asbestos": ["asbestos", "mesothelioma", "fibres", "fibers"],
             },
+        },
+    },
+    {
+        "type": "7. Tudor era",
+        "question": "Why were Tudor chimneys prone to catching fire?",
+        "checks": {
+            "sources_non_empty": True,
+            "sources_cover_topics": {
+                "chimneys": ["chimney", "timber", "wattle", "soot", "fire", "flue"],
+            },
+        },
+    },
+    {
+        "type": "8. Post-war era",
+        "question": "How did carbon monoxide become a hazard in post-war bathrooms?",
+        "checks": {
+            "sources_non_empty": True,
+            "sources_cover_topics": {
+                "carbon monoxide": ["carbon monoxide", "co", "toxic", "gas", "oxygen"],
+            },
+        },
+    },
+    {
+        "type": "9. Cross-era",
+        "question": "Compare Victorian and Edwardian approaches to electrical safety.",
+        "checks": {
+            "sources_non_empty": True,
         },
     },
 ]

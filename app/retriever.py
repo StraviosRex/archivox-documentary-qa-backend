@@ -153,7 +153,7 @@ def _current_index_metadata() -> dict[str, Any]:
         "embedding_model": settings.embedding_model,
         "chunk_window_size": settings.chunk_window_size,
         "chunk_overlap": settings.chunk_overlap,
-        "index_version": "3",
+        "index_version": "4",
     }
 
 
@@ -533,41 +533,41 @@ def _load_all_chunks(
     return chunks
 
 
-def _detect_query_era(query: str) -> str | None:
-    """Return 'victorian' or 'edwardian' if the query targets a specific era."""
-    lowered = query.lower()
-    has_victorian = "victorian" in lowered
-    has_edwardian = "edwardian" in lowered
+ERA_QUERY_PATTERNS: dict[str, re.Pattern] = {
+    "victorian": re.compile(r"\bvictorian\b", re.IGNORECASE),
+    "edwardian": re.compile(r"\bedwardian\b", re.IGNORECASE),
+    "tudor": re.compile(r"\btudor\b|\b16th century\b|\bsixteenth century\b", re.IGNORECASE),
+    "postwar": re.compile(r"\bpost.?war\b|\b1950s\b|\b1950's\b", re.IGNORECASE),
+}
 
-    if has_victorian and not has_edwardian:
-        return "victorian"
 
-    if has_edwardian and not has_victorian:
-        return "edwardian"
-
-    return None
+def _detect_query_era(query: str) -> frozenset[str]:
+    """Return the set of eras explicitly mentioned in the query."""
+    return frozenset(
+        era
+        for era, pattern in ERA_QUERY_PATTERNS.items()
+        if pattern.search(query)
+    )
 
 
 def _dense_results(
     collection: chromadb.Collection,
     query: str,
     candidate_limit: int,
+    where: dict | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Retrieve dense semantic candidates using the complete question."""
     query_embedding = embed_query(query)
 
-    results = collection.query(
-        query_embeddings=[query_embedding],
-        n_results=min(
-            candidate_limit,
-            collection.count(),
-        ),
-        include=[
-            "documents",
-            "metadatas",
-            "distances",
-        ],
-    )
+    query_kwargs: dict[str, Any] = {
+        "query_embeddings": [query_embedding],
+        "n_results": min(candidate_limit, collection.count()),
+        "include": ["documents", "metadatas", "distances"],
+    }
+    if where:
+        query_kwargs["where"] = where
+
+    results = collection.query(**query_kwargs)
 
     ids = results.get("ids", [[]])[0]
     documents = results.get("documents", [[]])[0]
@@ -1153,25 +1153,18 @@ def retrieve(
 
     all_chunks = _load_all_chunks(collection)
 
-    query_era = _detect_query_era(query)
-
-    if query_era == "victorian":
-        excluded_era = "edwardian"
-    elif query_era == "edwardian":
-        excluded_era = "victorian"
-    else:
-        excluded_era = None
+    query_eras = _detect_query_era(query)
 
     logger.debug(
-        "Era filter: query_era=%s excluded_era=%s",
-        query_era,
-        excluded_era,
+        "Era filter: query_eras=%s",
+        query_eras,
     )
 
-    if excluded_era:
+    if query_eras:
+        allowed = query_eras | {"general"}
         all_chunks = [
             c for c in all_chunks
-            if c.get("era") != excluded_era
+            if c.get("era") in allowed
         ]
 
     logger.debug(
@@ -1181,17 +1174,18 @@ def retrieve(
 
     t0 = time.perf_counter()
 
+    era_where: dict | None = None
+    if query_eras:
+        era_list = list(query_eras | {"general"})
+        era_where = {"era": {"$in": era_list}}
+
     t_dense_start = time.perf_counter()
     dense_chunks = _dense_results(
         collection=collection,
         query=query,
         candidate_limit=candidate_limit,
+        where=era_where,
     )
-    if excluded_era:
-        dense_chunks = {
-            k: v for k, v in dense_chunks.items()
-            if v.get("era") != excluded_era
-        }
     t_dense_ms = round((time.perf_counter() - t_dense_start) * 1000)
 
     t_build_start = time.perf_counter()

@@ -16,15 +16,25 @@ class Chunk:
 TIMESTAMP_PATTERN = re.compile(r"^\d{2}:\d{2}:\d{2}$")
 VICTORIAN_PATTERN = re.compile(r"victorian", re.IGNORECASE)
 EDWARDIAN_PATTERN = re.compile(r"edwardian", re.IGNORECASE)
+TUDOR_PATTERN = re.compile(r"tudor|16th.century|sixteenth.century", re.IGNORECASE)
+POSTWAR_PATTERN = re.compile(r"post.?war|1950s|1950's", re.IGNORECASE)
+
+_ERA_PATTERNS = {
+    "victorian": VICTORIAN_PATTERN,
+    "edwardian": EDWARDIAN_PATTERN,
+    "tudor": TUDOR_PATTERN,
+    "postwar": POSTWAR_PATTERN,
+}
 
 
 def _detect_chunk_era(text: str) -> str:
-    victorian_count = len(VICTORIAN_PATTERN.findall(text))
-    edwardian_count = len(EDWARDIAN_PATTERN.findall(text))
-    if edwardian_count > victorian_count:
-        return "edwardian"
-    if victorian_count > edwardian_count:
-        return "victorian"
+    counts = {era: len(pattern.findall(text)) for era, pattern in _ERA_PATTERNS.items()}
+    max_count = max(counts.values())
+    if max_count == 0:
+        return "general"
+    dominant = [era for era, count in counts.items() if count == max_count]
+    if len(dominant) == 1:
+        return dominant[0]
     return "general"
 
 
