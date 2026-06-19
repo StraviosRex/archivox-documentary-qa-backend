@@ -30,6 +30,7 @@ Thumbs.db
 *copy*.py
 *copy*.yaml
 DESIGN(*).md
+DESIGN_FULL.md
 RETRIEVAL_REFACTORING_PLAN.md
 *.example1.example
 gitignore.txt
