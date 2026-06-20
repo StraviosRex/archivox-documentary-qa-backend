@@ -115,7 +115,7 @@ The next segment of spoken text continues here.
 
 All times are end-to-end HTTP round trips (retrieval + LLM generation) measured against a running server with cross-encoder re-ranking enabled. Clean-start run - index rebuilt from scratch before measurement.
 
-### Response times by question type
+### Original six-question response benchmark
 
 | # | Question type | Time | Result |
 |---|---|---|---|
@@ -125,10 +125,11 @@ All times are end-to-end HTTP round trips (retrieval + LLM generation) measured 
 | 4 | Vague | 3.61s | PASS |
 | 5 | Out-of-scope | 3.18s | PASS |
 | 6 | Multi-topic (Borax / Celluloid / Asbestos) | 3.50s | PASS |
-| | **Average** | **3.47s** | **6/6** |
+| | **Average** | **3.47s** | **Original 6/6** |
 
 This table records the original six-question performance benchmark. The current
-regression suite has 9 questions, including the later era-focused cases.
+regression suite has 9 questions, including the later era-focused cases, and
+prints `9/9 passed` when all assertions pass.
 
 ### Multi-topic retrieval coverage
 
@@ -145,7 +146,7 @@ regression suite has 9 questions, including the later era-focused cases.
 
 Both are well within the 30-second requirement. Retrieval takes ~3s in both cases; the difference is generation speed — Groq's hosted inference is significantly faster than local CPU inference.
 
-See [benchmarks.md](benchmarks.md) for full phase-by-phase results, CE on/off comparisons, and threshold calibration findings.
+See [BENCHMARKS.md](BENCHMARKS.md) for full phase-by-phase results, CE on/off comparisons, and threshold calibration findings.
 
 ## Screenshots
 
@@ -175,7 +176,7 @@ Ask a question about the transcript.
 ```json
 {
   "question": "What was borax used for in Victorian milk?",
-  "profile": "groq_llama70b"
+  "profile": "groq_llama8b"
 }
 ```
 
