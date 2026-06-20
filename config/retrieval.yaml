@@ -45,14 +45,47 @@ lexical:
       - ineffective
       - difficult to police
       - difficult to prove
+    additives:
+      - adulterated
+      - alkali
+      - boracic acid
+      - borax
+      - addition
+    discover:
+      - clue
+      - post mortems
+      - post-mortems
+      - revealed
+      - tested
 
 query_intent:
+  literal_topic_stopwords:
+    - affect
+    - consumption
+    - dangerous
+    - dangers
+    - discover
+    - each
+    - early
+    - electrical
+    - health
+    - made
+    - people
+    - pose
+    - posed
+    - problem
+    - separately
+    - victorian
+  short_topic_terms:
+    - milk
   diverse_evidence_markers:
     - "both "
     - " together"
     - "compare "
     - "compared "
     - comparison
+    - separately
+    - "each "
     - respectively
     - "across "
     - different ways

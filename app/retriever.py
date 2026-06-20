@@ -77,6 +77,24 @@ STOPWORDS = {
     "would", "documentary", "transcript",
 }
 
+LITERAL_TOPIC_STOPWORDS = set(
+    str(term)
+    for term in (
+        RETRIEVAL_CONFIG
+        .get("query_intent", {})
+        .get("literal_topic_stopwords", [])
+    )
+)
+
+SHORT_TOPIC_TERMS = set(
+    str(term)
+    for term in (
+        RETRIEVAL_CONFIG
+        .get("query_intent", {})
+        .get("short_topic_terms", [])
+    )
+)
+
 CONCEPT_ALIASES = {
     str(term): tuple(str(alias) for alias in aliases)
     for term, aliases in (
@@ -406,6 +424,15 @@ def _extract_literal_query_terms(query: str) -> set[str]:
     }
 
 
+def _literal_topic_terms(query: str) -> set[str]:
+    """Return literal query terms that are likely to name distinct topics."""
+    terms = _extract_literal_query_terms(query) - LITERAL_TOPIC_STOPWORDS
+    terms.update(
+        SHORT_TOPIC_TERMS.intersection(set(_tokens(query)))
+    )
+    return terms
+
+
 def _lexical_features(
     query: str,
     text: str,
@@ -725,6 +752,42 @@ def _where_from_query_filters(
     return {"$and": clauses}
 
 
+def _explicit_filter_label_count(
+    query_filters: dict[str, frozenset[str]],
+) -> int:
+    """Count non-default metadata labels detected in the query."""
+    count = 0
+
+    for field_name, allowed_values in query_filters.items():
+        field_rule = METADATA_QUERY_PATTERNS.get(
+            field_name,
+            {},
+        )
+        default_label = field_rule.get("default")
+        explicit_values = set(allowed_values)
+
+        if default_label:
+            explicit_values.discard(str(default_label))
+
+        count += len(explicit_values)
+
+    return count
+
+
+def _should_relax_metadata_filters(
+    query: str,
+    query_filters: dict[str, frozenset[str]],
+) -> bool:
+    """Return True when a multi-part query should search beyond one label."""
+    if not query_filters:
+        return False
+
+    if not _needs_diverse_evidence(query):
+        return False
+
+    return _explicit_filter_label_count(query_filters) == 1
+
+
 # ---------------------------------------------------------------------------
 # Dense retrieval and candidate fusion
 # ---------------------------------------------------------------------------
@@ -999,6 +1062,35 @@ def _passes_relevance_filter(
     return False
 
 
+def _has_literal_topic_match(
+    query: str,
+    chunk: dict[str, Any],
+) -> bool:
+    """Return True when a chunk exactly matches a specific query topic."""
+    literal_terms = _literal_topic_terms(query)
+    matched_terms = set(chunk.get("matched_terms", []))
+    matched_literals = literal_terms.intersection(matched_terms)
+
+    return any(len(term) >= 6 for term in matched_literals)
+
+
+def _passes_diverse_relevance_filter(
+    query: str,
+    chunk: dict[str, Any],
+) -> bool:
+    """Keep exact-topic matches for broad or multi-part questions."""
+    if _passes_relevance_filter(chunk):
+        return True
+
+    if not _needs_diverse_evidence(query):
+        return False
+
+    return _has_literal_topic_match(
+        query=query,
+        chunk=chunk,
+    )
+
+
 def _needs_diverse_evidence(query: str) -> bool:
     """Detect questions that clearly request broad or multi-part evidence."""
     lowered = query.lower()
@@ -1210,41 +1302,21 @@ def _select_diverse_sources(
         else anchor["relevance_score"] * 0.45
     )
 
-    literal_query_terms = _extract_literal_query_terms(query)
+    literal_query_terms = _literal_topic_terms(query)
 
     # Prioritise candidates that introduce new query term coverage before
-    # same-topic geographically-distinct duplicates (e.g. two asbestos chunks
-    # crowd out celluloid when all three topics are asked about).
+    # same-topic duplicates crowd out other requested topics.
     anchor_terms = set(anchor["matched_terms"])
-    remaining = sorted(
-        relevant[1:],
-        key=lambda c: (
-            not bool(set(c.get("matched_terms", [])) - anchor_terms),
-            -c.get("cross_encoder_score", -999.0),
-        ),
-    )
 
-    for candidate in remaining:
-        if len(selected) >= result_limit:
-            break
-
-        if candidate["id"] in selected_ids:
-            continue
-
-        if minimum_score is not None and candidate["relevance_score"] < minimum_score:
-            continue
-
-        candidate_terms = set(
-            candidate["matched_terms"]
+    def _literal_terms(chunk: dict[str, Any]) -> set[str]:
+        return (
+            set(chunk.get("matched_terms", []))
+            .intersection(literal_query_terms)
         )
 
-        adds_new_terms = bool(
-            candidate_terms - covered_terms
-        )
-
-        candidate_index = _chunk_index(candidate)
-
-        distinct_region = all(
+    def _is_distinct_region(chunk: dict[str, Any]) -> bool:
+        candidate_index = _chunk_index(chunk)
+        return all(
             candidate_index is None
             or _chunk_index(existing) is None
             or abs(
@@ -1254,9 +1326,58 @@ def _select_diverse_sources(
             for existing in selected
         )
 
+    while len(selected) < result_limit:
         uncovered_literal = literal_query_terms - covered_terms
-        if not adds_new_terms and (not distinct_region or uncovered_literal):
-            continue
+        eligible: list[dict[str, Any]] = []
+
+        for candidate in relevant[1:]:
+            if candidate["id"] in selected_ids:
+                continue
+
+            if minimum_score is not None and candidate["relevance_score"] < minimum_score:
+                continue
+
+            candidate_terms = set(
+                candidate["matched_terms"]
+            )
+
+            uncovered_candidate_literal = _literal_terms(candidate) - covered_terms
+
+            if uncovered_literal and not uncovered_candidate_literal:
+                continue
+
+            adds_new_terms = bool(
+                candidate_terms - covered_terms
+            )
+
+            if not adds_new_terms and not _is_distinct_region(candidate):
+                continue
+
+            eligible.append(candidate)
+
+        if not eligible:
+            break
+
+        eligible.sort(
+            key=lambda c: (
+                -len(_literal_terms(c) - covered_terms),
+                -max(
+                    (
+                        len(term)
+                        for term in _literal_terms(c) - covered_terms
+                    ),
+                    default=0,
+                ),
+                -len(_literal_terms(c)),
+                not _is_distinct_region(c),
+                -c.get("cross_encoder_score", -999.0),
+            ),
+        )
+
+        candidate = eligible[0]
+        candidate_terms = set(
+            candidate["matched_terms"]
+        )
 
         selected.append(candidate)
         selected_ids.add(candidate["id"])
@@ -1355,6 +1476,16 @@ def retrieve(
 
     query_filters = _detect_query_filters(query)
 
+    if _should_relax_metadata_filters(
+        query=query,
+        query_filters=query_filters,
+    ):
+        logger.debug(
+            "Relaxing metadata filters for multi-part query: %s",
+            query_filters,
+        )
+        query_filters = {}
+
     logger.debug(
         "Metadata filters: %s",
         query_filters,
@@ -1408,7 +1539,7 @@ def retrieve(
         # Inject literal query-term matches using token-based matching so only
         # exact word forms qualify (not substrings of longer words).
         candidate_ids = {c["id"] for c in candidates}
-        literal_terms = _extract_literal_query_terms(query)
+        literal_terms = _literal_topic_terms(query)
         literal_injections: list[dict[str, Any]] = []
         for chunk in all_chunks:
             if chunk["id"] in candidate_ids:
@@ -1434,14 +1565,21 @@ def retrieve(
     t_ce_ms = round((time.perf_counter() - t_ce_start) * 1000)
 
     t_filter_start = time.perf_counter()
+    use_diverse = _needs_diverse_evidence(query)
+
     relevant = [
         candidate
         for candidate in candidates
-        if _passes_relevance_filter(candidate)
+        if (
+            _passes_diverse_relevance_filter(
+                query=query,
+                chunk=candidate,
+            )
+            if use_diverse
+            else _passes_relevance_filter(candidate)
+        )
     ]
     t_filter_ms = round((time.perf_counter() - t_filter_start) * 1000)
-
-    use_diverse = _needs_diverse_evidence(query)
 
     if (
         "both " in query.lower()
