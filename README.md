@@ -150,6 +150,9 @@ See [BENCHMARKS.md](BENCHMARKS.md) for full phase-by-phase results, CE on/off co
 
 ## API
 
+Interactive API docs are available at `http://localhost:8000/docs` after the
+server starts.
+
 ### `POST /ask`
 
 Ask a question about the transcript.

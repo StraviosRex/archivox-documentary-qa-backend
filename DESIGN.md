@@ -18,4 +18,4 @@ The prompt contains only the selected excerpts, each labelled with its timestamp
 
 ## 4. Improvements Given More Time
 
-I would replace the hand-tuned lexical scoring with BM25 or rank fusion for more principled dense-lexical combination. I would also explore topic-aware chunking instead of fixed two-segment windows, and add optional response streaming while preserving the backend-owned source citation flow.
+I would split the retrieval module into smaller components for indexing, metadata filtering, scoring, reranking, and source selection. I would also replace the hand-tuned lexical scoring with BM25 or rank fusion, explore topic-aware chunking instead of fixed two-segment windows, and add optional response streaming while preserving the backend-owned source citation flow.
