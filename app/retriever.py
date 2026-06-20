@@ -1,11 +1,11 @@
 """
 Index and retrieve transcript evidence for Archivox.
 
-This module owns the retrieval pipeline end to end for the assignment-sized
-app: Chroma index lifecycle, query metadata filters, lexical candidate scoring,
-cross-encoder reranking, and final source selection. Keeping those pieces in
-one module avoids premature file splitting while the functions below keep each
-stage explicit and testable.
+For this assignment-sized app, the retrieval pipeline lives in one place so the
+whole path is easy to follow: Chroma indexing, YAML metadata filters, lexical
+candidate scoring, cross-encoder reranking, and final source selection. The
+file is intentionally sectioned so each stage can still be read and tested on
+its own.
 """
 
 import hashlib

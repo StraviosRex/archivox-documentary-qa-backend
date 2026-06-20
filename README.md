@@ -148,24 +148,6 @@ Both are well within the 30-second requirement. Retrieval takes ~3s in both case
 
 See [BENCHMARKS.md](BENCHMARKS.md) for full phase-by-phase results, CE on/off comparisons, and threshold calibration findings.
 
-## Screenshots
-
-**Factual question with grounded sources and model info**
-
-![Factual answer with sources](assets/frontend01.png)
-
-**Out-of-scope refusal - no sources returned**
-
-![Out-of-scope refusal](assets/frontend02.png)
-
-**Multi-topic query - all three topics retrieved**
-
-![Multi-topic answer covering Borax, Celluloid, and Asbestos](assets/frontend03.png)
-
-**Interactive API docs (`/docs`)**
-
-![Swagger UI with JSON response](assets/frontend04.png)
-
 ## API
 
 ### `POST /ask`
@@ -185,15 +167,19 @@ Ask a question about the transcript.
 **Response**
 ```json
 {
-  "answer": "Between 00:10:33 and 00:13:21, borax was used to neutralize acid in sour milk, making spoiled milk taste fresh again. It did not remove the bacteria, so it could mask dangerous contamination.",
+  "answer": "Borax was used to prolong the life of milk by neutralizing the acid that forms when milk sours or spoils. The Victorians added alkalis, including borax, to remove the sour taste and make the milk palatable again.",
   "sources": [
     {
-      "timestamp": "00:10:33-00:13:21",
-      "excerpt": "Boracic acid was a component of a product called borax... used during the Victorian period to prolong the life of milk."
+      "timestamp": "00:10:33-00:12:25",
+      "excerpt": "Of a product called borax, An alkali, which was used during the Victorian period to prolong the life of milk. This milk doesn't taste very nice, so you would throw it away. The Victorians would say that's a waste, so let's do something to it that removes the sour taste...."
     },
     {
-      "timestamp": "00:13:21-00:16:14",
-      "excerpt": "The real problem is it doesn't get rid of the bacteria, the underlying cause of the acid."
+      "timestamp": "00:11:30-00:13:21",
+      "excerpt": "...It's neutralized the acid, it's now made this milk palatable again. This new wonder alkali, sold in the shops as borax, was so popular it became a staple of the Victorian larder. But alarmingly, borax wasn't only used to treat milk...."
+    },
+    {
+      "timestamp": "00:09:34-00:11:30",
+      "excerpt": "...Of a product called borax, An alkali, which was used during the Victorian period to prolong the life of milk. This milk doesn't taste very nice, so you would throw it away. The Victorians would say that's a waste, so let's do something to it that removes the sour taste...."
     }
   ],
   "profile": "groq_llama8b",
@@ -214,6 +200,24 @@ Returns the list of available LLM profiles and the current default.
 ### `GET /health`
 
 Returns `{"status": "ok"}`.
+
+## Screenshots
+
+**Factual question with grounded sources and model info**
+
+![Factual answer with sources](assets/frontend01.png)
+
+**Out-of-scope refusal - no sources returned**
+
+![Out-of-scope refusal](assets/frontend02.png)
+
+**Multi-topic query - all three topics retrieved**
+
+![Multi-topic answer covering Borax, Celluloid, and Asbestos](assets/frontend03.png)
+
+**Interactive API docs (`/docs`)**
+
+![Swagger UI with JSON response](assets/frontend04.png)
 
 ## LLM profiles
 
@@ -246,7 +250,7 @@ All settings can be set in `.env`. See [.env.example](.env.example) for the full
 | `OPENROUTER_API_KEY` | - | OpenRouter API key |
 | `GEMINI_API_KEY` | - | Gemini API key |
 | `OLLAMA_BASE_URL` | `http://localhost:11434/v1` | Ollama endpoint. Use `http://host.docker.internal:11434/v1` when running inside Docker |
-| `TOP_K` | `5` | Chunks retrieved per query |
+| `TOP_K` | `7` | Chunks retrieved per query |
 | `SOURCES_IN_RESPONSE` | `3` | Sources returned in the response |
 | `SIMILARITY_THRESHOLD` | `0.48` | Max cosine distance for a chunk to be included |
 | `RERANKING_ENABLED` | `true` | Enable cross-encoder re-ranking (`cross-encoder/ms-marco-MiniLM-L-6-v2`) |
